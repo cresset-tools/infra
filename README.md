@@ -61,10 +61,22 @@ TLS certs, so do this first and let propagation settle (~5 minutes).
 
 ### 3. Edit placeholders
 
-Three TODOs across two files:
+Four TODOs across two files:
 
-**`hosts/origin/disko.nix`** — replace `REPLACE_ME_WITH_NUMERIC_VOLUME_ID`
-in the `volumeId` let-binding with the volume's numeric ID from step 1.
+**`hosts/origin/disko.nix`** — replace two per-instance IDs:
+
+- `volumeId` — the volume's numeric ID from step 1.
+- `bootDiskSerial` — the boot disk's QEMU SCSI serial. With the box
+  in rescue mode, run:
+  ```sh
+  ssh root@<rescue-ip> 'lsblk -o NAME,SIZE,MODEL,SERIAL && ls /dev/disk/by-id/'
+  ```
+  Look for the QEMU HARDDISK row whose SIZE matches the server's
+  primary disk (~40 GB on CAX11). The value you want is everything
+  after the `scsi-0QEMU_QEMU_HARDDISK_` prefix in
+  `/dev/disk/by-id/`. **This matters**: with a volume attached,
+  `/dev/sda` may be the volume rather than the boot disk, so a
+  hardcoded `/dev/sda` would clobber the volume during install.
 
 **`hosts/origin/configuration.nix`** — replace:
 

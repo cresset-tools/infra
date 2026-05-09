@@ -31,8 +31,6 @@
     virtualHosts."index.bougie.tools" = {
       enableACME = true;
       forceSSL = true;
-      http3 = true;
-      kTLS = true;
 
       root = "/srv/index";
 
@@ -53,8 +51,13 @@
         # Short-TTL revalidation for the only mutable file in the tree.
         # ETag means most refetches are 304s; max-age keeps misbehaving
         # caches honest.
+        #
+        # add_header in nginx REPLACES parent add_headers, it doesn't
+        # accumulate — so we must re-emit every header we want here, not
+        # just the one we're overriding. gixy enforces this at build time.
         extraConfig = ''
           add_header Cache-Control "public, max-age=30, must-revalidate" always;
+          add_header X-Content-Type-Options nosniff always;
           etag on;
         '';
       };
@@ -76,8 +79,6 @@
     virtualHosts."blobs.bougie.tools" = {
       enableACME = true;
       forceSSL = true;
-      http3 = true;
-      kTLS = true;
 
       root = "/srv";
 
@@ -93,8 +94,9 @@
           add_header Cache-Control "public, max-age=31536000, immutable" always;
           add_header X-Content-Type-Options nosniff always;
 
-          # The CLI accepts these two; nginx's defaults match either.
-          types { application/zstd zst; application/octet-stream ""; }
+          # Blob filenames are bare sha256 hashes (no extension), so the
+          # default_type fallback governs what's served — application/
+          # octet-stream is the right answer for opaque tarballs.
           default_type application/octet-stream;
 
           autoindex off;

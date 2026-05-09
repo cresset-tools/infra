@@ -59,11 +59,16 @@
             exec ${nixos-anywhere.packages.${system}.default}/bin/nixos-anywhere \
               --flake ".#$host" \
               --target-host "root@$target" \
+              --print-build-logs \
               "$@"
           '');
         };
 
         # `nix run .#switch -- <host> <ip>` for incremental updates.
+        # Uses nixpkgs's nixos-rebuild rather than the system PATH (which
+        # may not have it, e.g. the operator running from Debian). Builds
+        # on the target itself so cross-arch concerns (laptop is x86_64,
+        # box is aarch64) don't matter.
         switch = {
           type = "app";
           program = toString (pkgs.writeShellScript "switch" ''
@@ -73,9 +78,10 @@
               exit 2
             fi
             host="$1"; target="$2"; shift 2
-            exec nixos-rebuild switch \
+            exec ${pkgs.nixos-rebuild}/bin/nixos-rebuild switch \
               --flake ".#$host" \
               --target-host "root@$target" \
+              --build-host "root@$target" \
               --use-substitutes \
               "$@"
           '');
