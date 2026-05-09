@@ -1,0 +1,33 @@
+# Eval-only CI: runs `nix flake check` on every PR and on push to main.
+# Catches broken NixOS configurations and lock-file bumps that fail to
+# resolve before they get merged.
+#
+# We do NOT build the full system here — that's a 4 GB+ closure per
+# host and would burn cache pulls without producing anything we use.
+# The eval pass is enough to catch syntactic and dependency-graph
+# regressions; full builds happen on the actual host via `nixos-rebuild
+# switch` (manual) or system.autoUpgrade (Sunday timer).
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  flake-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3
+
+      - name: nix flake check
+        run: nix flake check --all-systems --print-build-logs

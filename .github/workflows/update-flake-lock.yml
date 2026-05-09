@@ -1,0 +1,46 @@
+# Open a weekly PR that bumps every flake input. Counterpart to the
+# server's system.autoUpgrade timer: this workflow is the source-of-
+# truth update mechanism (PR → human review → merge to main); the
+# server then refetches main on its Sunday timer and rebuilds against
+# the merged lock.
+#
+# Scheduled for Saturday so the PR sits ready by Sunday morning, giving
+# enough time to review (and roll back) before the box's 03:30 UTC
+# autoUpgrade window picks up the change.
+name: update-flake-lock
+
+on:
+  workflow_dispatch:    # manual trigger, useful for testing or out-of-band bumps
+  schedule:
+    - cron: "0 6 * * 6" # Saturday 06:00 UTC
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3
+
+      - name: Update flake.lock
+        uses: DeterminateSystems/update-flake-lock@v25
+        with:
+          pr-title: "flake.lock: weekly input bump"
+          pr-body: |
+            Automated weekly bump of every flake input.
+
+            Merge this PR before the next Sunday 03:30 UTC autoUpgrade
+            cycle to roll the new lock onto running hosts. CI's
+            `nix flake check` runs on this PR via `check.yml` — if it's
+            green, the bump is structurally sound (eval works for every
+            host's NixOS configuration).
+          pr-labels: |
+            dependencies
+            automated
+          token: ${{ secrets.GITHUB_TOKEN }}
