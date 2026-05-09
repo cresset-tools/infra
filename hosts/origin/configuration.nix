@@ -190,15 +190,6 @@
     requires = [ "bootstrap-index.service" ];
   };
 
-  # ---- Hardening ----
-  services.fail2ban = {
-    enable = true;
-    maxretry = 5;
-    bantime = "1h";
-    bantime-increment.enable = true;
-    ignoreIP = [ "127.0.0.1/8" "::1" ];
-  };
-
   # Unattended security updates. Sunday at 03:30 UTC the box re-fetches
   # this flake from GitHub at HEAD-of-main, rebuilds, switches, and
   # reboots if the kernel changed. The server has no push credentials,
