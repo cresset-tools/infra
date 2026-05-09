@@ -49,11 +49,26 @@
   ];
 
   # ---- Networking ----
+  # IPv4: Hetzner DHCPs an address; dhcpcd default behaviour is fine.
+  # IPv6: Hetzner routes a /64 to the server but does NOT run DHCPv6,
+  # so the address has to be configured statically. Convention is
+  # <prefix>::1, with the gateway reached via the link-local fe80::1
+  # on the server-facing interface (Hetzner sends RAs advertising it,
+  # but pinning it statically removes any RA-timing dependency at boot).
+  # The interface name `enp1s0` is what virtio-net comes up as on
+  # CAX11; if it ever changes, the deploy fails fast with "interface
+  # not found" rather than silently dropping v6.
   networking = {
     hostName = "origin";
     domain = "bougie.tools";
-    # Hetzner DHCPs an IPv4 + assigns a /64 IPv6 prefix; defaults are fine.
     useDHCP = lib.mkDefault true;
+    interfaces.enp1s0.ipv6.addresses = [
+      { address = "2a01:4f8:c014:cfef::1"; prefixLength = 64; }
+    ];
+    defaultGateway6 = {
+      address = "fe80::1";
+      interface = "enp1s0";
+    };
     firewall = {
       enable = true;
       allowedTCPPorts = [
