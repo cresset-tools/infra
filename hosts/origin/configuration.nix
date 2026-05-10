@@ -114,10 +114,10 @@
 
   # ---- The deploy user ----
   # CI's rsync-publish-tree app SSHes here as `deploy`. The user owns
-  # /srv so it can rsync into /srv/index-versions/<VERSION>/ and create
-  # the /srv/index symlink atomically. No shell access needed beyond
-  # what rsync uses; restrict to rsync via authorized_keys command= if
-  # you want belt-and-braces.
+  # /srv so the publish pipeline can write the snapshot tree
+  # (DISTRIBUTION.md "Hosting" three-phase rsync). No shell access
+  # needed beyond what rsync uses; restrict to rsync via
+  # authorized_keys command= if you want belt-and-braces.
   users.groups.deploy = {};
   users.users.deploy = {
     isNormalUser = true;
@@ -142,9 +142,16 @@
   #      the mount removes /srv from local-fs.target's dependencies, so
   #      tmpfiles can fire before the volume is mounted and chown the
   #      hidden underlying root dir instead).
-  #   2. Creates index-versions/ and blobs/ on the mounted volume.
-  #   3. Seeds an empty initial index so nginx 200s from day zero.
-  #   4. Creates the /srv/index symlink the publish pipeline flips.
+  #   2. Creates the snapshot-model layout: /srv/index/ (the index
+  #      vhost docroot) and /srv/blobs/ (the blob vhost docroot).
+  #   3. Seeds an empty initial /srv/index/index.json so nginx 200s
+  #      from day zero. The publish pipeline replaces this on its
+  #      first run (DISTRIBUTION.md "Hosting" three-phase rsync).
+  #   4. One-time migration: if the legacy /srv/index symlink is
+  #      present (pointing into /srv/index-versions/...), replace it
+  #      with a real directory so the publish pipeline can write into
+  #      it. The old /srv/index-versions/ tree is left alone — GC by
+  #      hand once stale roots have aged out.
   # nginx is ordered after this so the document root exists before the
   # daemon starts.
   systemd.services.bootstrap-index = {
@@ -164,22 +171,27 @@
       set -euo pipefail
       chown deploy:deploy /srv
       chmod 0755 /srv
-      install -d -o deploy -g deploy -m 0755 /srv/index-versions /srv/blobs
-      target=/srv/index-versions/initial
-      if [ ! -e "$target/index.json" ]; then
-        install -d -o deploy -g deploy -m 0755 "$target"
-        cat > "$target/index.json" <<'JSON'
+
+      # Migrate legacy /srv/index symlink → real directory. The
+      # publish pipeline writes into /srv/index/{versions,targets,…},
+      # which a symlink to a frozen versioned tree would silently
+      # forward into the wrong place.
+      if [ -L /srv/index ]; then
+        ${pkgs.coreutils}/bin/rm /srv/index
+      fi
+
+      install -d -o deploy -g deploy -m 0755 /srv/index /srv/blobs
+      if [ ! -e /srv/index/index.json ]; then
+        cat > /srv/index/index.json <<'JSON'
       {
         "schema": 1,
+        "version": "00000000T000000Z",
         "generated": "2024-01-01T00:00:00Z",
+        "source": { "git_commit": "unknown", "git_ref": "unknown" },
         "targets": {}
       }
       JSON
-        chown deploy:deploy "$target/index.json"
-      fi
-      if [ ! -L /srv/index ]; then
-        ln -s "$target" /srv/index.new
-        ${pkgs.coreutils}/bin/mv -T /srv/index.new /srv/index
+        chown deploy:deploy /srv/index/index.json
       fi
     '';
   };

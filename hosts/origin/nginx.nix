@@ -1,13 +1,25 @@
 # nginx configuration for the origin's two vhosts.
 #
-#   index.bougie.tools  → /srv/index/                  (symlink to a versioned dir)
+#   index.bougie.tools  → /srv/index/                  (snapshot-model flat tree)
 #   blobs.bougie.tools  → /srv/blobs/                  (content-addressed tarballs)
 #
-# Cache policy follows DISTRIBUTION.md:
-#   - /index.json (root): max-age=30, must-revalidate, ETag — small, frequent.
-#   - everything else under /index/: public, max-age=31536000, immutable —
-#     content-addressed via the section-hash chain, never changes at a URL.
-#   - blobs/: same long-immutable cache; sha256 path → bytes never change.
+# /srv/index/ is a flat directory written by the publish pipeline
+# (cresset-tools/php-build-standalone scripts/rsync-publish-tree.sh).
+# Layout (DISTRIBUTION.md "Server layout"):
+#
+#   /srv/index/
+#     index.json                                       # mutable root (replaced atomically per publish)
+#     index.json.sig                                   # mutable signature
+#     versions/<V>/targets/<target>/sections/...       # immutable per-publish snapshot
+#     targets/<target>/manifests/...                   # immutable, content-addressed by tag
+#
+# Cache policy:
+#   - /index.json + /index.json.sig: max-age=30, must-revalidate, ETag.
+#     The only mutable URLs in the protocol; revalidations are mostly
+#     304s thanks to ETag.
+#   - everything else: public, max-age=31536000, immutable — section
+#     URLs include the publish version, manifest URLs embed the tag,
+#     so the bytes at every URL are immutable for life.
 { config, pkgs, lib, ... }:
 {
   security.acme = {
@@ -24,31 +36,27 @@
     recommendedTlsSettings = true;
     recommendedBrotliSettings = true;
 
-    # nginx must follow the /srv/index symlink to the current versioned
-    # tree. NixOS defaults disable_symlinks off (the safe-but-permissive
-    # mode); keep that.
-
     virtualHosts."index.bougie.tools" = {
       enableACME = true;
       forceSSL = true;
 
       root = "/srv/index";
 
-      # Long-cache everything by default; the root index.json overrides
-      # below. JSON is the only content type here.
+      # Long-cache everything by default; the root index.json + .sig
+      # overrides below. JSON is the only content type here.
       extraConfig = ''
         default_type application/json;
         charset utf-8;
         add_header X-Content-Type-Options nosniff always;
 
-        # Default: content-addressed via the hash chain → never changes
-        # at a given URL → infinite immutable.
+        # Default: URL-immutable (versioned section paths,
+        # tag-embedded manifest paths) → infinite immutable cache.
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         etag on;
       '';
 
       locations."= /index.json" = {
-        # Short-TTL revalidation for the only mutable file in the tree.
+        # Short-TTL revalidation for the only mutable URL in the tree.
         # ETag means most refetches are 304s; max-age keeps misbehaving
         # caches honest.
         #
