@@ -1,7 +1,9 @@
-# nginx configuration for the origin's two vhosts.
+# nginx configuration for the origin's vhosts.
 #
-#   index.bougie.tools  → /srv/index/                  (snapshot-model flat tree)
-#   blobs.bougie.tools  → /srv/blobs/                  (content-addressed tarballs)
+#   index.bougie.tools     → /srv/index/                  (snapshot-model flat tree)
+#   blobs.bougie.tools     → /srv/blobs/                  (content-addressed tarballs)
+#   releases.bougie.tools  → /srv/releases/               (bougie binary mirror)
+#   bougie.tools           → (apex)                       (install.sh / install.ps1 redirects)
 #
 # /srv/index/ is a flat directory written by the publish pipeline
 # (cresset-tools/php-build-standalone scripts/rsync-publish-tree.sh).
@@ -113,6 +115,141 @@
       };
 
       # Anything outside /blobs/ is 404. Keeps misconfiguration contained.
+      locations."/" = {
+        extraConfig = ''
+          return 404;
+        '';
+      };
+    };
+
+    # releases.bougie.tools — the bougie binary distribution mirror,
+    # standing in for an R2 bucket. dist's release.yml CI uploads two
+    # things into /srv/releases/ via rsync over SSH as the `deploy`
+    # user (see configuration.nix for the user definition and
+    # bougie's .github/workflows/publish-mirror.yml for the publish
+    # side):
+    #
+    #   /srv/releases/github/bougie/releases/download/<tag>/<file>
+    #       Per-tag immutable archives + installers + checksums. The
+    #       path shape mirrors the GitHub Releases URL so dist's
+    #       generated installer can fall back from this mirror to GH
+    #       without rewriting paths.
+    #
+    #   /srv/releases/installers/bougie/latest/bougie-installer.{sh,ps1}
+    #       Rolling pointer that `curl -LsSf bougie.tools/install.sh
+    #       | sh` resolves to (via the apex redirect below). Short
+    #       cache so a new release shows up quickly; the installer
+    #       itself pins exact archive sha256s, so even a stale
+    #       installer can't tamper with what it ends up running.
+    #
+    # No directory listings anywhere. Anything outside the two
+    # documented prefixes 404s — matches blobs.bougie.tools'
+    # "misconfiguration contained" stance.
+    virtualHosts."releases.bougie.tools" = {
+      enableACME = true;
+      forceSSL = true;
+
+      root = "/srv/releases";
+
+      # Common headers for both prefixes; per-location blocks override
+      # Cache-Control. Per nginx semantics, `add_header` in a child
+      # block REPLACES (not extends) parent add_headers — every
+      # location below re-emits the security headers it wants.
+      extraConfig = ''
+        add_header X-Content-Type-Options nosniff always;
+        charset utf-8;
+      '';
+
+      # Versioned artifacts: URL embeds the tag, bytes never change.
+      # Year-long immutable cache. Includes archive tarballs/zips,
+      # the per-archive *.sha256 sidecars, the combined sha256.sum,
+      # and the per-release copies of the installer scripts that
+      # dist also uploads to the GitHub Release.
+      locations."/github/" = {
+        extraConfig = ''
+          gzip off;
+          brotli off;
+
+          add_header Cache-Control "public, max-age=31536000, immutable" always;
+          add_header X-Content-Type-Options nosniff always;
+          default_type application/octet-stream;
+
+          # .sh / .ps1 / .sha256 are text; let nginx infer JSON too in
+          # case dist starts emitting a manifest URL here. types{} below
+          # adds the few content types the default mime list misses for
+          # bare-stem files.
+          types {
+            application/x-sh           sh;
+            text/plain                 ps1 sha256;
+            application/json           json;
+            application/gzip           tar.gz tgz;
+            application/zip            zip;
+          }
+
+          autoindex off;
+          try_files $uri =404;
+        '';
+      };
+
+      # Rolling installers — the `curl ... | sh` entry point. Five
+      # minute cache (matches the uv/R2 setup the bougie spec started
+      # from) so a freshly cut release reaches users without being
+      # cached for hours, but each request doesn't bypass CDN
+      # entirely.
+      locations."/installers/" = {
+        extraConfig = ''
+          gzip on;
+          gzip_types application/x-sh text/plain;
+          brotli off;
+
+          add_header Cache-Control "public, max-age=300, must-revalidate" always;
+          add_header X-Content-Type-Options nosniff always;
+
+          types {
+            application/x-sh           sh;
+            text/plain                 ps1;
+          }
+
+          autoindex off;
+          try_files $uri =404;
+        '';
+      };
+
+      # Everything else 404s. Belt-and-braces match for the
+      # blobs.bougie.tools layout.
+      locations."/" = {
+        extraConfig = ''
+          return 404;
+        '';
+      };
+
+      locations."~ /\\." = {
+        extraConfig = "deny all;";
+      };
+    };
+
+    # bougie.tools apex — just two redirects, nothing else served.
+    # `curl -LsSf https://bougie.tools/install.sh | sh` is the public
+    # one-liner; the apex returning a 301 keeps the public URL short
+    # without binding bougie.tools' apex to nginx state. If a
+    # marketing site lands here later, replace the `return 404` with
+    # whatever serves the homepage and keep the two redirect blocks.
+    virtualHosts."bougie.tools" = {
+      enableACME = true;
+      forceSSL = true;
+
+      locations."= /install.sh" = {
+        extraConfig = ''
+          return 301 https://releases.bougie.tools/installers/bougie/latest/bougie-installer.sh;
+        '';
+      };
+
+      locations."= /install.ps1" = {
+        extraConfig = ''
+          return 301 https://releases.bougie.tools/installers/bougie/latest/bougie-installer.ps1;
+        '';
+      };
+
       locations."/" = {
         extraConfig = ''
           return 404;

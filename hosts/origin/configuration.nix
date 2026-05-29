@@ -143,7 +143,10 @@
   #      tmpfiles can fire before the volume is mounted and chown the
   #      hidden underlying root dir instead).
   #   2. Creates the snapshot-model layout: /srv/index/ (the index
-  #      vhost docroot) and /srv/blobs/ (the blob vhost docroot).
+  #      vhost docroot), /srv/blobs/ (the blob vhost docroot), and
+  #      /srv/releases/{github,installers} (the bougie binary mirror
+  #      docroot — see nginx.nix for the vhost + cache policy and
+  #      bougie's publish-mirror.yml for the writer side).
   #   3. Seeds an empty initial /srv/index/index.json so nginx 200s
   #      from day zero. The publish pipeline replaces this on its
   #      first run (DISTRIBUTION.md "Hosting" three-phase rsync).
@@ -181,6 +184,19 @@
       fi
 
       install -d -o deploy -g deploy -m 0755 /srv/index /srv/blobs
+      # bougie binary mirror tree. Both prefixes have to exist before
+      # nginx starts so the `/github/` and `/installers/` location
+      # blocks don't 404 on the first request (release.bougie.tools is
+      # otherwise empty until the first publish-mirror.yml run).
+      install -d -o deploy -g deploy -m 0755 \
+        /srv/releases \
+        /srv/releases/github \
+        /srv/releases/github/bougie \
+        /srv/releases/github/bougie/releases \
+        /srv/releases/github/bougie/releases/download \
+        /srv/releases/installers \
+        /srv/releases/installers/bougie \
+        /srv/releases/installers/bougie/latest
       if [ ! -e /srv/index/index.json ]; then
         cat > /srv/index/index.json <<'JSON'
       {
