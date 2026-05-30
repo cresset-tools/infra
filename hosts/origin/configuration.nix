@@ -126,12 +126,9 @@
     description = "CI publish account";
     shell = pkgs.bashInteractive;
     openssh.authorizedKeys.keys = [
-      # TODO: replace with the public half of secrets.PUBLISH_SSH_KEY in
-      # cresset-tools/php-build-standalone GitHub Actions secrets.
-      # "ssh-ed25519 AAAA... cresset CI publish"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMAlEwhbBOJor7VO1Bkv7jLM4aTzElFGSdduEMIz73d7 jelle@dev-debn-02"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICunYiTe1MOJsGC5OBn69bewMBS5bCCE1WayvM4DZLwE jelle@Jelles-MacBook-Pro.local"
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE3JLt9h4tZvZ1Hl3m7q8lKJKpgnnLuCoBunlG9AxH24 bougie CI publish"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHHigF4N4lR0UuIXB+bM7Mr52PMGurKPoe0Yjld3U/QB bougie CI publish"
     ];
   };
 
