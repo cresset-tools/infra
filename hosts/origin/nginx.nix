@@ -3,7 +3,7 @@
 #   index.bougie.tools     → /srv/index/                  (snapshot-model flat tree)
 #   blobs.bougie.tools     → /srv/blobs/                  (content-addressed tarballs)
 #   releases.bougie.tools  → /srv/releases/               (bougie binary mirror)
-#   bougie.tools           → (apex)                       (install.sh / install.ps1 redirects)
+#   bougie.tools           → ./site (static homepage)      (+ install.sh / install.ps1 redirects)
 #
 # /srv/index/ is a flat directory written by the publish pipeline
 # (cresset-tools/php-build-standalone scripts/rsync-publish-tree.sh).
@@ -228,15 +228,27 @@
       };
     };
 
-    # bougie.tools apex — just two redirects, nothing else served.
+    # bougie.tools apex — static homepage + the two installer redirects.
     # `curl -LsSf https://bougie.tools/install.sh | sh` is the public
-    # one-liner; the apex returning a 301 keeps the public URL short
-    # without binding bougie.tools' apex to nginx state. If a
-    # marketing site lands here later, replace the `return 404` with
-    # whatever serves the homepage and keep the two redirect blocks.
+    # one-liner; the exact-match install.sh / install.ps1 locations take
+    # precedence over the catch-all `/`, so the one-liner keeps working
+    # alongside the homepage. The site is a single self-contained
+    # `index.html` (no external assets) in ./site, copied into the store
+    # at build time — edit it and `nix run .#switch -- origin <ip>`.
     virtualHosts."bougie.tools" = {
       enableACME = true;
       forceSSL = true;
+
+      root = ./site;
+
+      # Server-level defaults. Per nginx semantics a child `add_header`
+      # REPLACES (not extends) these, so the `/` location below re-emits
+      # the security header it wants (gixy enforces this at build time).
+      extraConfig = ''
+        index index.html;
+        charset utf-8;
+        add_header X-Content-Type-Options nosniff always;
+      '';
 
       locations."= /install.sh" = {
         extraConfig = ''
@@ -250,10 +262,19 @@
         '';
       };
 
+      # Static homepage. One self-contained file, so a short revalidating
+      # cache keeps edits visible without bypassing the CDN. Unknown
+      # paths 404 against the site root rather than redirecting.
       locations."/" = {
         extraConfig = ''
-          return 404;
+          try_files $uri $uri/ =404;
+          add_header Cache-Control "public, max-age=300, must-revalidate" always;
+          add_header X-Content-Type-Options nosniff always;
         '';
+      };
+
+      locations."~ /\\." = {
+        extraConfig = "deny all;";
       };
     };
   };

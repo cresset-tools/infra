@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bougie — a uv for PHP</title>
+<meta name="description" content="bougie is a Composer-compatible package manager, PHP toolchain manager, and dev server — one fast Rust binary. From a fresh checkout to a running Magento dev environment in one command.">
+<meta property="og:title" content="bougie — a uv for PHP">
+<meta property="og:description" content="Composer-compatible package manager + PHP toolchain + dev services, in one fast Rust binary.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://bougie.tools/">
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#272e3a;
+    --fg:#e6edf3; --muted:#9aa7b4; --accent:#d76fff; --accent2:#7ee787;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:860px; margin:0 auto; padding:0 24px}
+  header{padding:88px 0 40px; text-align:center}
+  .logo{font:700 56px/1 var(--mono); letter-spacing:-.02em}
+  .logo .dot{color:var(--accent)}
+  .tag{margin:18px 0 0; font-size:22px; color:var(--fg)}
+  .sub{margin:14px auto 0; max-width:620px; color:var(--muted); font-size:17px}
+
+  .install{margin:36px auto 0; max-width:680px}
+  .cmd{
+    display:flex; align-items:center; gap:12px;
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:16px 18px; font-family:var(--mono); font-size:15px; overflow-x:auto;
+  }
+  .cmd .p{color:var(--accent2); user-select:none}
+  .cmd code{white-space:nowrap}
+  .install .alt{margin:10px 2px 0; color:var(--muted); font-size:13px; font-family:var(--mono)}
+  .install .alt code{color:var(--fg)}
+
+  .grid{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin:64px 0 0}
+  .card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:22px 22px 20px}
+  .card h3{margin:0 0 8px; font-size:17px}
+  .card p{margin:0; color:var(--muted); font-size:15px}
+  .card .k{color:var(--accent2); font-family:var(--mono)}
+
+  .magento{
+    margin:28px 0 0; padding:24px; border-radius:12px;
+    background:linear-gradient(180deg,#1b1326,#161b22); border:1px solid #3a2a4d;
+  }
+  .magento h2{margin:0 0 8px; font-size:20px}
+  .magento p{margin:0; color:var(--muted)}
+  .magento .em{color:var(--fg)}
+
+  footer{margin:72px 0 56px; padding-top:28px; border-top:1px solid var(--border); color:var(--muted); font-size:14px; text-align:center}
+  footer a{color:var(--muted)}
+  @media (max-width:640px){
+    .grid{grid-template-columns:1fr}
+    header{padding:56px 0 28px}
+    .logo{font-size:44px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">bougie<span class="dot">.</span></div>
+    <p class="tag">A <strong>uv</strong> for PHP.</p>
+    <p class="sub">A Composer-compatible package manager, PHP toolchain manager, and dev
+      server — in one fast Rust binary. Install PHP and extensions, resolve and install
+      dependencies, and bring up your services with a single command.</p>
+
+    <div class="install">
+      <div class="cmd"><span class="p">$</span><code>curl -LsSf https://bougie.tools/install.sh | sh</code></div>
+      <p class="alt">Windows: <code>irm https://bougie.tools/install.ps1 | iex</code></p>
+    </div>
+  </header>
+
+  <section class="grid">
+    <div class="card">
+      <h3>Fast by construction</h3>
+      <p>A native, pubgrub-based Composer resolver and an autoloader that's
+        byte-for-byte identical to Composer's — written in Rust, parallel
+        throughout. <span class="k">composer install</span>, in seconds.</p>
+    </div>
+    <div class="card">
+      <h3>The whole toolchain</h3>
+      <p>Installs and pins PHP versions and extensions, runs Composer, and
+        supervises dev services — MariaDB, Redis, OpenSearch, RabbitMQ — so a
+        project comes up the same way everywhere.</p>
+    </div>
+    <div class="card">
+      <h3>Drop-in compatible</h3>
+      <p>Reads your <span class="k">composer.json</span> and
+        <span class="k">composer.lock</span> and produces the same
+        <span class="k">vendor/</span>. No new manifest, no workflow change —
+        adopt it today.</p>
+    </div>
+    <div class="card">
+      <h3>One command to run</h3>
+      <p><span class="k">bougie sync</span> creates the lockfile if needed,
+        installs the matching PHP + extensions, and materializes
+        <span class="k">vendor/</span>. <span class="k">bgx</span> runs a tool
+        straight from a Composer package.</p>
+    </div>
+  </section>
+
+  <section class="magento">
+    <h2>Built to make Magento approachable</h2>
+    <p>Magento has the heaviest dev setup in PHP. bougie takes it from
+      <span class="em">"follow the 20-step wiki"</span> to
+      <span class="em">"one command to a running store"</span>: the right PHP,
+      every required extension, the full service stack, and a hundreds-of-package
+      install that finishes in seconds.</p>
+  </section>
+
+  <footer>
+    <a href="https://github.com/cresset-tools/bougie">GitHub</a> &nbsp;·&nbsp;
+    <a href="https://github.com/cresset-tools/bougie#readme">Docs</a> &nbsp;·&nbsp;
+    a <a href="https://cresset.tools">cresset.tools</a> project
+  </footer>
+</div>
+</body>
+</html>
