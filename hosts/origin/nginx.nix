@@ -4,6 +4,8 @@
 #   blobs.bougie.tools     → /srv/blobs/                  (content-addressed tarballs)
 #   releases.bougie.tools  → /srv/releases/               (bougie binary mirror)
 #   bougie.tools           → ./site (static homepage)      (+ install.sh / install.ps1 redirects)
+#   cresset.tools          → ./cresset-site (homepage)     (umbrella brand)
+#   www.{bougie,cresset}.tools → 301 → apex                (globalRedirect)
 #
 # /srv/index/ is a flat directory written by the publish pipeline
 # (cresset-tools/php-build-standalone scripts/rsync-publish-tree.sh).
@@ -276,6 +278,50 @@
       locations."~ /\\." = {
         extraConfig = "deny all;";
       };
+    };
+
+    # cresset.tools apex — the umbrella-brand homepage (bougie's parent).
+    # Same static-site shape as bougie.tools, served from ./cresset-site.
+    # No installer redirects here. (DNS: cresset.tools must A → this box,
+    # via Cloudflare, before ACME can issue — see README "Point DNS".)
+    virtualHosts."cresset.tools" = {
+      enableACME = true;
+      forceSSL = true;
+
+      root = ./cresset-site;
+
+      extraConfig = ''
+        index index.html;
+        charset utf-8;
+        add_header X-Content-Type-Options nosniff always;
+      '';
+
+      locations."/" = {
+        extraConfig = ''
+          try_files $uri $uri/ =404;
+          add_header Cache-Control "public, max-age=300, must-revalidate" always;
+          add_header X-Content-Type-Options nosniff always;
+        '';
+      };
+
+      locations."~ /\\." = {
+        extraConfig = "deny all;";
+      };
+    };
+
+    # www.* → apex 301s (preserving path) via the NixOS nginx
+    # globalRedirect option. Each needs its own DNS record + ACME cert,
+    # so point `www.bougie.tools` / `www.cresset.tools` at this box too.
+    virtualHosts."www.bougie.tools" = {
+      enableACME = true;
+      forceSSL = true;
+      globalRedirect = "bougie.tools";
+    };
+
+    virtualHosts."www.cresset.tools" = {
+      enableACME = true;
+      forceSSL = true;
+      globalRedirect = "cresset.tools";
     };
   };
 }
