@@ -3,8 +3,8 @@
 #   index.bougie.tools     → /srv/index/                  (snapshot-model flat tree)
 #   blobs.bougie.tools     → /srv/blobs/                  (content-addressed tarballs)
 #   releases.bougie.tools  → /srv/releases/               (bougie binary mirror)
-#   bougie.tools           → ./bougie-site (homepage)      (+ install.sh / install.ps1 redirects)
-#   cresset.tools          → ./cresset-site (homepage)     (umbrella brand)
+#   bougie.tools           → ./bougie (homepage)      (+ install.sh / install.ps1 redirects)
+#   cresset.tools          → ./cresset (homepage)     (umbrella brand)
 #   www.{bougie,cresset}.tools → 301 → apex                (globalRedirect)
 #
 # /srv/index/ is a flat directory written by the publish pipeline
@@ -235,13 +235,13 @@
     # one-liner; the exact-match install.sh / install.ps1 locations take
     # precedence over the catch-all `/`, so the one-liner keeps working
     # alongside the homepage. The site is a single self-contained
-    # `index.html` (no external assets) in ./bougie-site, copied into the store
+    # `index.html` (no external assets) in ./bougie, copied into the store
     # at build time — edit it and `nix run .#switch -- origin <ip>`.
     virtualHosts."bougie.tools" = {
       enableACME = true;
       forceSSL = true;
 
-      root = ./bougie-site;
+      root = ./bougie;
 
       # Server-level defaults. Per nginx semantics a child `add_header`
       # REPLACES (not extends) these, so the `/` location below re-emits
@@ -281,14 +281,14 @@
     };
 
     # cresset.tools apex — the umbrella-brand homepage (bougie's parent).
-    # Same static-site shape as bougie.tools, served from ./cresset-site.
+    # Same static-site shape as bougie.tools, served from ./cresset.
     # No installer redirects here. (DNS: cresset.tools must A → this box,
     # via Cloudflare, before ACME can issue — see README "Point DNS".)
     virtualHosts."cresset.tools" = {
       enableACME = true;
       forceSSL = true;
 
-      root = ./cresset-site;
+      root = ./cresset;
 
       extraConfig = ''
         index index.html;

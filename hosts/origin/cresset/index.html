@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cresset.tools - fancy PHP tooling</title>
+  <meta name="description"
+    content="cresset.tools builds fast, carefully-made developer tools for the PHP ecosystem. Home of bougie.">
+  <meta property="og:title" content="cresset.tools — developer tools for PHP">
+  <meta property="og:description" content="Fast, carefully-made developer tools for the PHP ecosystem. Home of bougie.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://cresset.tools/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --bg: #ffffff;
+      --ink: #080807;
+      --muted: #3a3a33;
+      --faint: #5e5d53;
+      --rule: #b6b5a8;
+      --accent: #2f27ff;
+      --prompt: #8f8bff;
+      --main: "Archivo", ui-sans-serif, system-ui, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box
+    }
+
+    html {
+      -webkit-text-size-adjust: 100%
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.7 var(--main);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a {
+      color: var(--ink);
+      text-decoration: none;
+      border-bottom: 1px solid var(--rule)
+    }
+
+    a:hover {
+      border-bottom-color: var(--accent);
+      color: var(--accent)
+    }
+
+    site-wrap {
+      display: block;
+      max-width: 660px;
+      margin: 0 auto;
+      padding: 0 28px
+    }
+
+    header {
+      padding: 80px 0 0
+    }
+
+    site-name {
+      display: block;
+      font-size: 15px;
+      letter-spacing: .02em
+    }
+
+    site-name b {
+      font-weight: 700
+    }
+
+    name-dot {
+      color: var(--accent)
+    }
+
+    intro-desc {
+      display: block;
+      margin: 22px 0 0;
+      font-size: 15px;
+      color: var(--muted);
+      max-width: 560px;
+      text-wrap: pretty
+    }
+
+    text-hi {
+      color: var(--ink)
+    }
+
+    sec-rule {
+      display: block;
+      margin: 44px 0 0;
+      border-top: 1px solid var(--ink)
+    }
+
+    sec-label {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin: 10px 0 0;
+      font-size: 11px;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--faint);
+      white-space: nowrap;
+    }
+
+    layout-spacer {
+      flex: 1
+    }
+
+    tool-list {
+      display: block;
+      margin: 8px 0 0;
+      padding: 0
+    }
+
+    tool-entry {
+      display: block;
+      padding: 22px 0;
+      border-bottom: 1px solid var(--rule)
+    }
+
+    tool-head {
+      display: flex;
+      align-items: baseline;
+      gap: 12px
+    }
+
+    tool-name {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -.01em
+    }
+
+    tool-name name-dot {
+      color: var(--accent)
+    }
+
+    tool-status {
+      font-size: 11px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--accent)
+    }
+
+    tool-head a {
+      font-size: 13px;
+      color: var(--muted);
+      white-space: nowrap
+    }
+
+    tool-entry p {
+      margin: 8px 0 0;
+      font-size: 14px;
+      color: var(--muted);
+      max-width: 540px;
+      text-wrap: pretty
+    }
+
+    cmd-line {
+      display: flex;
+      gap: 10px;
+      margin: 14px 0 0;
+      padding: 11px 14px;
+      background: var(--ink);
+      color: var(--bg);
+      font-size: 13px;
+      overflow-x: auto;
+    }
+
+    cmd-prompt {
+      color: var(--prompt);
+      user-select: none
+    }
+
+    cmd-line code {
+      white-space: nowrap
+    }
+
+    tool-soon {
+      display: block;
+      padding: 22px 0 0
+    }
+
+    soon-name {
+      display: block;
+      font-size: 14px;
+      color: var(--faint)
+    }
+
+    tool-soon p {
+      margin: 6px 0 0;
+      font-size: 14px;
+      color: var(--muted);
+      max-width: 540px;
+      text-wrap: pretty
+    }
+
+    footer {
+      margin: 56px 0 64px;
+      padding-top: 18px;
+      border-top: 1px solid var(--ink);
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      color: var(--faint);
+      letter-spacing: .02em
+    }
+
+    footer a {
+      color: var(--muted);
+      border-bottom: none
+    }
+
+    footer a:hover {
+      color: var(--accent)
+    }
+
+    @media (max-width:560px) {
+      header {
+        padding: 56px 0 0
+      }
+
+      tool-head {
+        flex-wrap: wrap;
+        gap: 6px 12px
+      }
+
+      footer {
+        flex-direction: column;
+        gap: 8px
+      }
+
+      footer layout-spacer {
+        display: none
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <site-wrap>
+    <header>
+      <site-name><b>cresset</b><name-dot>.</name-dot>tools</site-name>
+      <intro-desc>
+        We started with a development environment manager, but that's not the only part of building with PHP that needs to improve.
+        cresset.tools tries to built a modern PHP toolset with speed and ease of use in mind.
+      </intro-desc>
+    </header>
+
+    <sec-rule></sec-rule>
+    <sec-label><span>Tools</span><layout-spacer></layout-spacer><span>01 the workspace</span></sec-label>
+
+    <tool-list>
+      <tool-entry>
+        <tool-head>
+          <tool-name>bougie<name-dot>.</name-dot></tool-name>
+          <layout-spacer></layout-spacer>
+          <a href="https://bougie.tools">bougie.tools →</a>
+        </tool-head>
+        <p>
+          Think PHP manager + Composer + DDEV.
+          Installs your PHP, installs your <code>vendor/</code> and starts your services.
+          Really really fast. This is PHP the luxury way.
+        </p>
+        <p>
+          Install now or learn more at <a href="https://bougie.tools">bougie.tools</a>.
+        </p>
+        <cmd-line><cmd-prompt>$</cmd-prompt><code>curl -LsSf https://bougie.tools/install.sh | sh</code></cmd-line>
+      </tool-entry>
+      <tool-soon>
+        <soon-name>// more on the way</soon-name>
+        <p>We can't tell what's coming yet but it's gonna be for PHP and it's gonna be great.</p>
+      </tool-soon>
+    </tool-list>
+
+    <footer>
+      <a href="https://github.com/cresset-tools">GitHub</a>
+      <span>Cresset is a tool collection built by Jelle Besseling</span>
+      <layout-spacer></layout-spacer>
+      <!-- <span>© cresset.tools</span> -->
+    </footer>
+  </site-wrap>
+</body>
+
+</html>
