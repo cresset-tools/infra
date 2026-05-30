@@ -3,7 +3,7 @@
 #   index.bougie.tools     → /srv/index/                  (snapshot-model flat tree)
 #   blobs.bougie.tools     → /srv/blobs/                  (content-addressed tarballs)
 #   releases.bougie.tools  → /srv/releases/               (bougie binary mirror)
-#   bougie.tools           → ./site (static homepage)      (+ install.sh / install.ps1 redirects)
+#   bougie.tools           → ./bougie-site (homepage)      (+ install.sh / install.ps1 redirects)
 #   cresset.tools          → ./cresset-site (homepage)     (umbrella brand)
 #   www.{bougie,cresset}.tools → 301 → apex                (globalRedirect)
 #
@@ -235,13 +235,13 @@
     # one-liner; the exact-match install.sh / install.ps1 locations take
     # precedence over the catch-all `/`, so the one-liner keeps working
     # alongside the homepage. The site is a single self-contained
-    # `index.html` (no external assets) in ./site, copied into the store
+    # `index.html` (no external assets) in ./bougie-site, copied into the store
     # at build time — edit it and `nix run .#switch -- origin <ip>`.
     virtualHosts."bougie.tools" = {
       enableACME = true;
       forceSSL = true;
 
-      root = ./site;
+      root = ./bougie-site;
 
       # Server-level defaults. Per nginx semantics a child `add_header`
       # REPLACES (not extends) these, so the `/` location below re-emits
