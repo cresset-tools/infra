@@ -141,6 +141,12 @@ in
         ${stateDir}/app/storage/app/public
       cd ${stateDir}/app
 
+      # Make Octane use OUR FrankenPHP (full extension set incl. mbstring)
+      # instead of downloading its own. octane's findFrankenPhpBinary()
+      # searches base_path() (= ${stateDir}/app); without this it fetches a
+      # generic binary whose PHP lacks mb_split and the worker crashes.
+      ln -sf ${pkgs.frankenphp}/bin/frankenphp ${stateDir}/app/frankenphp
+
       # APP_KEY: generate once, persist outside the copy.
       if [ ! -f ${stateDir}/app-key ]; then
         php artisan key:generate --show > ${stateDir}/app-key
