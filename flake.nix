@@ -3,6 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/*";
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -13,12 +14,21 @@
     };
   };
 
-  outputs = { self, nixpkgs, disko, nixos-anywhere }:
+  outputs = { self, nixpkgs, determinate, disko, nixos-anywhere }:
     let
       # CAX11 is aarch64. The deploy/switch helper apps run on the
       # operator's laptop too, so we expose them on both common arches.
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+      # Overlay nixpkgs so `pkgs.nix` (and anything built against it, e.g.
+      # nixos-rebuild) is Determinate Nix rather than upstream Nix.
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [
+          (final: prev: {
+            nix = determinate.inputs.nix.packages.${system}.default;
+          })
+        ];
+      };
       hostSystem = "aarch64-linux";
 
       # Every directory under ./hosts/ becomes a nixosConfigurations entry.
