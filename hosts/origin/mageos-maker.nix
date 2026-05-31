@@ -24,24 +24,23 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source. Repin to the `master` merge commit once
-  # cresset-tools/mageos-maker#1 (laravel/octane + package-lock.json)
-  # lands; currently the octane feature-branch head.
+  # Pinned maker source — master merge commit of cresset-tools/mageos-maker#1
+  # (adds laravel/octane + the package-lock.json the reproducible build needs).
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "da97bc96780eecd3052af539819b503af671ff9f";
+    rev = "4bd39383237964603ba0c1bc686712857c946f96";
     hash = "sha256-8UAn3UMA6bPegH60qc8gg5KhVK6Zx/Q1eMG7eZuaRC4=";
   };
 
-  # Front-end assets (public/build) via Vite. Needs the committed
-  # package-lock.json (PR #1). npmDepsHash is resolved on first build
-  # (nix prints the correct hash on mismatch).
+  # Front-end assets (public/build) via Vite, from the committed
+  # package-lock.json. Hash resolved + full build verified against the
+  # flake's pinned nixpkgs (549bd84).
   assets = pkgs.buildNpmPackage {
     pname = "mageos-maker-assets";
     version = "0";
     inherit src;
-    npmDepsHash = lib.fakeHash; # TODO: resolve on first build
+    npmDepsHash = "sha256-cGZUqzm7FcCQsLcKvT5iMb9EgMcxk2nbfVOlh0gFwLc=";
     npmBuildScript = "build"; # package.json "build": "vite build"
     # The Laravel app isn't an npm package; we only want the built
     # assets, not an npm `install` of a "dist".
@@ -58,14 +57,14 @@ let
   # `--no-scripts`: Laravel's post-autoload-dump (`artisan package:discover`)
   # boots the app and writes bootstrap/cache — defer it to the on-box
   # activation (migrate + package:discover + config:cache) where the DB
-  # and APP_KEY exist. vendorHash resolved on first build.
+  # and APP_KEY exist.
   app = php.buildComposerProject {
     pname = "mageos-maker";
     version = "0";
     inherit src;
     composerNoDev = true;
     composerNoScripts = true;
-    vendorHash = lib.fakeHash; # TODO: resolve on first build
+    vendorHash = "sha256-yzdAZgT2aKN27jj20Kyelldi2hdLhiwTI87hGbsyQWo=";
     postInstall = ''
       cp -r ${assets}/build "$out/share/php/mageos-maker/public/build"
     '';
