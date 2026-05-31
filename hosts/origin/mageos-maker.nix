@@ -186,14 +186,18 @@ in
       WorkingDirectory = "${stateDir}/app";
       # APP_KEY is a file secret; load it without baking into the unit.
       ExecStartPre = "${pkgs.coreutils}/bin/test -f ${stateDir}/app-key";
+      # Run octane:start under FrankenPHP's OWN php (`php-cli`), not the
+      # php84 used for the build/setup. The php84 wrapper exports
+      # PHP_INI_SCAN_DIR=<php84-lib>; if octane:start runs under php84 that
+      # value is inherited by the `frankenphp run` worker it spawns, whose
+      # ZTS php then tries to load php84's NTS extension .so's, fails
+      # silently, and ends up without mbstring → "undefined function
+      # mb_split". Running under `frankenphp php-cli` keeps PHP_INI_SCAN_DIR
+      # pointed at FrankenPHP's own (ZTS) extensions for both the parent
+      # and the inherited worker.
       ExecStart = pkgs.writeShellScript "mageos-maker-start" ''
         export APP_KEY="$(cat ${stateDir}/app-key)"
-        # Diagnostic: which frankenphp will Octane resolve? It searches
-        # PATH then base_path(); both must be our nixpkgs build (full
-        # extension set incl. mbstring), never a downloaded one.
-        echo "mageos-maker: frankenphp on PATH = $(command -v frankenphp || echo NONE)"
-        echo "mageos-maker: base_path binary  = $(${pkgs.coreutils}/bin/ls -l ${stateDir}/app/frankenphp 2>&1 || echo NONE)"
-        exec ${php}/bin/php artisan octane:start \
+        exec ${pkgs.frankenphp}/bin/frankenphp php-cli artisan octane:start \
           --server=frankenphp \
           --host=127.0.0.1 --port=${toString port} \
           --workers=auto --max-requests=512
