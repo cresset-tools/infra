@@ -95,18 +95,17 @@ in
   };
   users.groups.${user} = { };
 
-  # Writable state: SQLite DB + Laravel's storage/ and bootstrap/cache.
-  # The store app symlinks these out to here (done in the activation
-  # oneshot below, since the store paths are read-only).
+  # Writable state lives under ${stateDir} (StateDirectory creates it):
+  # the SQLite DB, the APP_KEY file, and ${stateDir}/app — a writable
+  # copy of the read-only store app (Laravel needs bootstrap/cache +
+  # storage writable).
   systemd.tmpfiles.rules = [
     "d ${stateDir} 0750 ${user} ${user} -"
-    "d ${stateDir}/storage 0750 ${user} ${user} -"
-    "d ${stateDir}/bootstrap-cache 0750 ${user} ${user} -"
   ];
 
-  # One-time-per-activation provisioning: APP_KEY, a writable app tree
-  # (store app + symlinked state), DB migrate, and config/route/view
-  # caches. Ordered before the Octane service.
+  # One-time-per-activation provisioning: a writable app copy, APP_KEY,
+  # DB migrate, and config/route/view caches. Ordered before the Octane
+  # service.
   systemd.services.mageos-maker-setup = {
     description = "mageos-maker provisioning (key, migrate, caches)";
     wantedBy = [ "multi-user.target" ];
@@ -122,9 +121,27 @@ in
     };
     script = ''
       set -euo pipefail
-      cd ${appRoot}
 
-      # APP_KEY: generate once, persist outside the store.
+      # Laravel needs bootstrap/cache + storage writable, but the Nix
+      # store app is read-only. Materialize a writable copy at a stable
+      # path (${stateDir}/app — not the per-build store path, so cached
+      # config/paths stay valid across redeploys). The SQLite DB +
+      # APP_KEY live in ${stateDir} (outside the copy) so they survive
+      # the re-copy on each activation. chmod -R skips symlinks, so the
+      # relative vendor/bin symlinks are left intact.
+      rm -rf ${stateDir}/app
+      cp -rT ${appRoot} ${stateDir}/app
+      chmod -R u+w ${stateDir}/app
+      mkdir -p \
+        ${stateDir}/app/bootstrap/cache \
+        ${stateDir}/app/storage/framework/cache \
+        ${stateDir}/app/storage/framework/sessions \
+        ${stateDir}/app/storage/framework/views \
+        ${stateDir}/app/storage/logs \
+        ${stateDir}/app/storage/app/public
+      cd ${stateDir}/app
+
+      # APP_KEY: generate once, persist outside the copy.
       if [ ! -f ${stateDir}/app-key ]; then
         php artisan key:generate --show > ${stateDir}/app-key
       fi
@@ -133,14 +150,13 @@ in
       # SQLite DB file must exist before migrate.
       [ -f ${stateDir}/database.sqlite ] || : > ${stateDir}/database.sqlite
 
-      # The store app is read-only; Laravel needs writable storage/ +
-      # bootstrap/cache. artisan is run with config pointing at the
-      # store app, but writes (cache, sessions, logs) go to state via
-      # env + the symlinks the service sets up. Run the deferred
-      # post-autoload-dump work here where DB + key exist.
-      php artisan package:discover --ansi || true
+      # Deferred post-autoload-dump work (skipped at build via
+      # --no-scripts), now that the tree is writable + DB/key exist.
+      php artisan package:discover --ansi
       php artisan migrate --force
       php artisan config:cache
+      # route:cache fails on closure routes; view:cache is a pure
+      # optimization — neither is fatal.
       php artisan route:cache || true
       php artisan view:cache || true
     '';
@@ -158,7 +174,7 @@ in
       User = user;
       Group = user;
       StateDirectory = "mageos-maker";
-      WorkingDirectory = appRoot;
+      WorkingDirectory = "${stateDir}/app";
       # APP_KEY is a file secret; load it without baking into the unit.
       ExecStartPre = "${pkgs.coreutils}/bin/test -f ${stateDir}/app-key";
       ExecStart = pkgs.writeShellScript "mageos-maker-start" ''
