@@ -132,13 +132,21 @@ in
       rm -rf ${stateDir}/app
       cp -rT ${appRoot} ${stateDir}/app
       chmod -R u+w ${stateDir}/app
+
+      # storage/ is PERSISTENT (symlinked to ${stateDir}/storage), so a
+      # redeploy doesn't wipe the baked Mage-OS catalog (a slow network
+      # fetch against repo.mage-os.org) or logs/sessions. bootstrap/cache
+      # lives in the copy — it's cheap to regenerate each activation.
+      rm -rf ${stateDir}/app/storage
+      ln -s ${stateDir}/storage ${stateDir}/app/storage
       mkdir -p \
         ${stateDir}/app/bootstrap/cache \
-        ${stateDir}/app/storage/framework/cache \
-        ${stateDir}/app/storage/framework/sessions \
-        ${stateDir}/app/storage/framework/views \
-        ${stateDir}/app/storage/logs \
-        ${stateDir}/app/storage/app/public
+        ${stateDir}/storage/framework/cache \
+        ${stateDir}/storage/framework/sessions \
+        ${stateDir}/storage/framework/views \
+        ${stateDir}/storage/logs \
+        ${stateDir}/storage/app/private \
+        ${stateDir}/storage/app/public
       cd ${stateDir}/app
 
       # Make Octane use OUR FrankenPHP (full extension set incl. mbstring)
@@ -164,6 +172,12 @@ in
       # --no-scripts), now that the tree is writable + DB/key exist.
       php artisan package:discover --ansi
       php artisan migrate --force
+      # Build the Mage-OS catalog: fetch repo.mage-os.org's packages.json
+      # and pre-bake install-tree graphs into storage/. The Configurator
+      # reads this; without it the UI errors with "Undefined array key".
+      # Persisted in ${stateDir}/storage, so subsequent activations only
+      # re-bake what changed.
+      php artisan mageos:catalog:update
       php artisan config:cache
       # route:cache fails on closure routes; view:cache is a pure
       # optimization — neither is fatal.
