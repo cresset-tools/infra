@@ -173,6 +173,9 @@ in
     wantedBy = [ "multi-user.target" ];
     after = [ "network.target" "mageos-maker-setup.service" ];
     requires = [ "mageos-maker-setup.service" ];
+    # Restart on every rebuild (the unit body is otherwise build-invariant,
+    # so a new app/binary wouldn't otherwise relaunch the worker).
+    restartTriggers = [ app pkgs.frankenphp ];
     path = [ php pkgs.frankenphp ];
     environment = appEnv // { HOME = stateDir; };
     serviceConfig = {
@@ -185,6 +188,11 @@ in
       ExecStartPre = "${pkgs.coreutils}/bin/test -f ${stateDir}/app-key";
       ExecStart = pkgs.writeShellScript "mageos-maker-start" ''
         export APP_KEY="$(cat ${stateDir}/app-key)"
+        # Diagnostic: which frankenphp will Octane resolve? It searches
+        # PATH then base_path(); both must be our nixpkgs build (full
+        # extension set incl. mbstring), never a downloaded one.
+        echo "mageos-maker: frankenphp on PATH = $(command -v frankenphp || echo NONE)"
+        echo "mageos-maker: base_path binary  = $(${pkgs.coreutils}/bin/ls -l ${stateDir}/app/frankenphp 2>&1 || echo NONE)"
         exec ${php}/bin/php artisan octane:start \
           --server=frankenphp \
           --host=127.0.0.1 --port=${toString port} \
