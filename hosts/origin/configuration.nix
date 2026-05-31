@@ -12,6 +12,7 @@
 {
   imports = [
     ./nginx.nix
+    ./mageos-maker.nix
   ];
 
   # ---- Bootloader ----
