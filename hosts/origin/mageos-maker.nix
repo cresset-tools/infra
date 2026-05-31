@@ -15,6 +15,19 @@
 # /var/lib/mageos-maker, outside the read-only Nix store. APP_KEY is
 # generated + persisted there on first activation — the infra repo has no
 # secrets framework, so nothing is committed.
+#
+# Hyvä private-Packagist credentials (for the catalog's Hyvä theme add-on
+# versions) are read from an OPTIONAL EnvironmentFile that you provision
+# on the box by hand (kept out of git since there's no secrets store):
+#
+#   install -o mageos-maker -g mageos-maker -m 0600 /dev/stdin \
+#     /var/lib/mageos-maker/hyva.env <<'EOF'
+#   MAGEOS_HYVA_PROJECT=<slug from your hyva-themes.repo.packagist.com URL>
+#   MAGEOS_HYVA_LICENSE_KEY=<the http-basic "token" password>
+#   EOF
+#   systemctl restart mageos-maker-setup.service
+#
+# Without it the catalog still builds, just without Hyvä theme versions.
 { config, pkgs, lib, ... }:
 let
   domain = "mageos-maker.cresset.tools";
@@ -118,6 +131,16 @@ in
       User = user;
       Group = user;
       StateDirectory = "mageos-maker";
+      # Hyvä private-Packagist creds for mageos:catalog:update's addon
+      # version lookups (MAGEOS_HYVA_PROJECT + MAGEOS_HYVA_LICENSE_KEY).
+      # A secret, so it's NOT in the Nix store/git — provision the file
+      # on the box (see the module header). Optional (`-`): the catalog
+      # still builds without it, just without Hyvä theme versions.
+      EnvironmentFile = "-${stateDir}/hyva.env";
+      # The first run bakes a graph per Mage-OS version (network-bound on
+      # repo.mage-os.org); don't let systemd's start timeout kill it.
+      # Subsequent runs are fast — storage/ persists the baked graphs.
+      TimeoutStartSec = "30min";
     };
     script = ''
       set -euo pipefail
@@ -176,8 +199,9 @@ in
       # and pre-bake install-tree graphs into storage/. The Configurator
       # reads this; without it the UI errors with "Undefined array key".
       # Persisted in ${stateDir}/storage, so subsequent activations only
-      # re-bake what changed.
-      php artisan mageos:catalog:update
+      # re-bake what changed. memory_limit raised (128M default OOMs while
+      # baking the full dependency graph → uncatchable fatal, exit 255).
+      php -d memory_limit=1G artisan mageos:catalog:update
       php artisan config:cache
       # route:cache fails on closure routes; view:cache is a pure
       # optimization — neither is fatal.
@@ -244,7 +268,7 @@ in
     script = ''
       set -euo pipefail
       ${pkgs.util-linux}/bin/runuser -u ${user} -- \
-        env HOME=${stateDir} ${php}/bin/php ${stateDir}/app/artisan mageos:catalog:update
+        env HOME=${stateDir} ${php}/bin/php -d memory_limit=1G ${stateDir}/app/artisan mageos:catalog:update
       # Recycle the worker so it re-reads the refreshed catalog (only if
       # it's currently up; a failed update above aborts before this).
       ${config.systemd.package}/bin/systemctl try-restart mageos-maker.service
