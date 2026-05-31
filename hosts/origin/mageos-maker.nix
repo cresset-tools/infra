@@ -147,9 +147,13 @@ in
       # generic binary whose PHP lacks mb_split and the worker crashes.
       ln -sf ${pkgs.frankenphp}/bin/frankenphp ${stateDir}/app/frankenphp
 
-      # APP_KEY: generate once, persist outside the copy.
-      if [ ! -f ${stateDir}/app-key ]; then
-        php artisan key:generate --show > ${stateDir}/app-key
+      # APP_KEY: a base64-encoded 32-byte key (AES-256-CBC). Generated
+      # from /dev/urandom rather than `artisan key:generate --show`,
+      # which boots Laravel and can capture stray output (e.g. an error
+      # from a half-broken earlier run) into the file. Regenerate if the
+      # file is missing or not a well-formed `base64:` key.
+      if ! grep -q '^base64:' ${stateDir}/app-key 2>/dev/null; then
+        echo "base64:$(head -c 32 /dev/urandom | base64 -w0)" > ${stateDir}/app-key
       fi
       export APP_KEY="$(cat ${stateDir}/app-key)"
 
