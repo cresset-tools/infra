@@ -230,6 +230,37 @@ in
     };
   };
 
+  # Periodic catalog refresh — Mage-OS publishes new versions over time,
+  # so re-fetch the manifest + re-bake graphs daily. The worker caches the
+  # catalog in a process-lifetime `static`, so after refreshing the
+  # on-disk catalog we recycle the worker to drop that cache. Runs as root
+  # only to issue the restart; the artisan command itself is dropped to
+  # the service user via runuser so storage/ writes stay user-owned.
+  systemd.services.mageos-maker-catalog = {
+    description = "Refresh mageos-maker's Mage-OS catalog";
+    after = [ "mageos-maker-setup.service" ];
+    requires = [ "mageos-maker-setup.service" ];
+    serviceConfig.Type = "oneshot";
+    script = ''
+      set -euo pipefail
+      ${pkgs.util-linux}/bin/runuser -u ${user} -- \
+        env HOME=${stateDir} ${php}/bin/php ${stateDir}/app/artisan mageos:catalog:update
+      # Recycle the worker so it re-reads the refreshed catalog (only if
+      # it's currently up; a failed update above aborts before this).
+      ${config.systemd.package}/bin/systemctl try-restart mageos-maker.service
+    '';
+  };
+
+  systemd.timers.mageos-maker-catalog = {
+    description = "Daily Mage-OS catalog refresh for mageos-maker";
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = "daily";
+      Persistent = true; # catch up if the box was off at the scheduled time
+      RandomizedDelaySec = "1h"; # spread load off the mage-os origin
+    };
+  };
+
   # Public vhost → reverse-proxy to the loopback Octane/FrankenPHP.
   # recommendedProxySettings is off globally (nginx.nix), so set the
   # proxy headers explicitly here.
