@@ -37,13 +37,15 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — master merge commit of cresset-tools/mageos-maker#1
-  # (adds laravel/octane + the package-lock.json the reproducible build needs).
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ eca4a7a
+  # ("reset starter link when saved config is modified" + wording), two
+  # commits past master/#7. composer.lock / package-lock.json unchanged, so
+  # vendorHash + npmDepsHash below stay put — only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "5d200f44e8a227ed1a5f834f49b7edbf919c1aaf";
-    hash = "sha256-kW7kPjeEQE0dctqEQ3qQUZBWeHmxZk0d4LyewJX8iZY=";
+    rev = "eca4a7aaef93530ec2658cb9ed076221fd28853c";
+    hash = "sha256-DXflPbAWNOIGbXxTWv+bUUMyT2GkmD9qSVUSSe/htXw=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
