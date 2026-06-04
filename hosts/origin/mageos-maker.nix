@@ -37,15 +37,15 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ eca4a7a
-  # ("reset starter link when saved config is modified" + wording), two
-  # commits past master/#7. composer.lock / package-lock.json unchanged, so
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 7a709b7
+  # (#8 "Add qoliber/nebula-admin-theme add-on"). Only a definitions/addons
+  # YAML was added — composer.lock / package-lock.json unchanged, so
   # vendorHash + npmDepsHash below stay put — only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "eca4a7aaef93530ec2658cb9ed076221fd28853c";
-    hash = "sha256-DXflPbAWNOIGbXxTWv+bUUMyT2GkmD9qSVUSSe/htXw=";
+    rev = "7a709b7f9db7eecdc33bb6538cdc873dfd35a087";
+    hash = "sha256-o8lb0U9tJ0WSlpKT3whBRxW5XnfOxiKztPKWUDk5CBs=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
