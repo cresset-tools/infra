@@ -37,15 +37,15 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 7a709b7
-  # (#8 "Add qoliber/nebula-admin-theme add-on"). Only a definitions/addons
-  # YAML was added — composer.lock / package-lock.json unchanged, so
-  # vendorHash + npmDepsHash below stay put — only rev + hash move.
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 0cdea06
+  # (#9 "Convert RMA from add-on to version-gated set (Mage-OS 3.0.0+)").
+  # Only PHP/YAML/test files changed — composer.lock / package-lock.json
+  # unchanged, so vendorHash + npmDepsHash below stay put — only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "7a709b7f9db7eecdc33bb6538cdc873dfd35a087";
-    hash = "sha256-o8lb0U9tJ0WSlpKT3whBRxW5XnfOxiKztPKWUDk5CBs=";
+    rev = "0cdea06c551ea90f5c28c4bf5bf2a29f1fafc46c";
+    hash = "sha256-rbLb9a7TWWM9bME1QOLTVfpJIirjU+KoChELVQH8Ny0=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
