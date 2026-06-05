@@ -168,13 +168,14 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       margin: 72px 0 0;
-      border: 2.5px solid var(--ink)
+      box-sizing: border-box;
+      gap: 2.5px;
     }
 
     feature-cell {
       display: block;
       padding: 26px;
-      border: 2px solid var(--ink);
+      outline: 2.5px solid var(--ink);
     }
 
     feature-cell.double {
