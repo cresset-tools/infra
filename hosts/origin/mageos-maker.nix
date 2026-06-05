@@ -37,15 +37,17 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 0cdea06
-  # (#9 "Convert RMA from add-on to version-gated set (Mage-OS 3.0.0+)").
-  # Only PHP/YAML/test files changed — composer.lock / package-lock.json
-  # unchanged, so vendorHash + npmDepsHash below stay put — only rev + hash move.
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 4aa696e
+  # (#12 "Make the configurator usable on mobile; composer.json drops to the
+  # bottom"; also includes #10 RMA add-on for older versions + #11 gitignore).
+  # Only PHP/YAML/blade/test files changed since the last pin — composer.lock /
+  # package-lock.json unchanged, so vendorHash + npmDepsHash below stay put —
+  # only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "0cdea06c551ea90f5c28c4bf5bf2a29f1fafc46c";
-    hash = "sha256-rbLb9a7TWWM9bME1QOLTVfpJIirjU+KoChELVQH8Ny0=";
+    rev = "4aa696e3b66f95769fa0181cd2c8cefbcdde8d25";
+    hash = "sha256-DnU6N+VGG7WJ8pHtf78ig8TPtWElINQAys5IhUjVaes=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
