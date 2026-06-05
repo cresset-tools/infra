@@ -169,12 +169,14 @@
       grid-template-columns: 1fr 1fr;
       margin: 72px 0 0;
       gap: 2.5px;
+      background: var(--ink);
+      border: 2.5px solid var(--ink);
     }
 
     feature-cell {
       display: block;
       padding: 26px;
-      outline: 2.5px solid var(--ink);
+      background: var(--bg);
     }
 
     feature-cell.double {
@@ -314,12 +316,8 @@
         grid-template-columns: 1fr
       }
 
-      feature-cell {
-        border-right: none
-      }
-
-      feature-cell:nth-last-child(2) {
-        border-bottom: 2.5px solid var(--ink)
+      feature-cell.double {
+        grid-column: span 1
       }
 
       install-box,
