@@ -174,16 +174,11 @@
     feature-cell {
       display: block;
       padding: 26px;
-      border-right: 2.5px solid var(--ink);
-      border-bottom: 2.5px solid var(--ink)
+      border: 2px solid var(--ink);
     }
 
-    feature-cell:nth-child(2n) {
-      border-right: none
-    }
-
-    feature-cell:nth-last-child(-n+2) {
-      border-bottom: none
+    feature-cell.double {
+      grid-column: span 2;
     }
 
     feature-num {
@@ -405,11 +400,22 @@
         <p>Reads your <key-token>composer.json</key-token> and <key-token>composer.lock</key-token> and
           produces the same <key-token>vendor/</key-token>. Pick up more bougie features when you need it</p>
       </feature-cell>
+      <feature-cell class="double">
+        <feature-num>05</feature-num>
+        <h3>All native</h3>
+        <p>
+          HTTP server, Elasticsearch, Rabbitmq, Redis, Mysql and of course: PHP-FPM all run with <key-token>native binaries</key-token>.
+          This gives you native disk speed on your Macbook, and no extra hassle with finding Docker containers.
+        </p>
+        <p>
+          Bougie fetches everything you need automatically from the bougie index.
+        </p>
+      </feature-cell>
     </feature-grid>
 
     <call-band>
       <band-tag>Mage-OS and Magento</band-tag>
-      <h2>Magento, approachable.</h2>
+      <h2>First class support for Magento</h2>
       <p>Magento has the heaviest dev setup in PHP. bougie makes it so you don't need a long tutorial but only
         <band-em>one command to a running store</band-em>. You'll have the correct PHP version, every required extension,
         the full service stack, and the packages are done installing before your coffee is done.
