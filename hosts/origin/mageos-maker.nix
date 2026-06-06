@@ -37,17 +37,17 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 4aa696e
-  # (#12 "Make the configurator usable on mobile; composer.json drops to the
-  # bottom"; also includes #10 RMA add-on for older versions + #11 gitignore).
-  # Only PHP/YAML/blade/test files changed since the last pin — composer.lock /
-  # package-lock.json unchanged, so vendorHash + npmDepsHash below stay put —
-  # only rev + hash move.
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 28a13f2
+  # (#25 "Add the fully-modular (modulargento) distribution flavor"; the version
+  # picker now offers a Standard / Fully-modular toggle at 3.0.0 that unlocks
+  # every module set). Only PHP/YAML/blade/test files changed since the last pin
+  # — composer.lock / package-lock.json unchanged, so vendorHash + npmDepsHash
+  # below stay put — only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "4aa696e3b66f95769fa0181cd2c8cefbcdde8d25";
-    hash = "sha256-DnU6N+VGG7WJ8pHtf78ig8TPtWElINQAys5IhUjVaes=";
+    rev = "28a13f26af95cae797c8c3042e2d018892518a5b";
+    hash = "sha256-2D43Z6uyz+WuFMLZsq7vqtdFoYe+OXXwlBZUchP5abM=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
