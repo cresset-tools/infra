@@ -5,6 +5,7 @@
 #   releases.bougie.tools  → /srv/releases/               (bougie binary mirror)
 #   bougie.tools           → ./bougie (homepage)      (+ install.sh / install.ps1 redirects)
 #   cresset.tools          → ./cresset (homepage)     (umbrella brand)
+#   modulargento.cresset.tools → /srv/modulargento/          (Composer repo)
 #   www.{bougie,cresset}.tools → 301 → apex                (globalRedirect)
 #
 # /srv/index/ is a flat directory written by the publish pipeline
@@ -300,6 +301,43 @@
         extraConfig = ''
           try_files $uri $uri/ =404;
           add_header Cache-Control "public, max-age=300, must-revalidate" always;
+          add_header X-Content-Type-Options nosniff always;
+        '';
+      };
+
+      locations."~ /\\." = {
+        extraConfig = "deny all;";
+      };
+    };
+
+    # modulargento.cresset.tools — Composer package repository for the
+    # modulargento fork. Static file host: satis-generated packages.json
+    # plus zip archives under /packages/. Published by rsync from CI or
+    # manually as the `deploy` user into /srv/modulargento/.
+    virtualHosts."modulargento.cresset.tools" = {
+      enableACME = true;
+      forceSSL = true;
+
+      root = "/srv/modulargento";
+
+      extraConfig = ''
+        charset utf-8;
+        autoindex off;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Cache-Control "public, max-age=300, must-revalidate" always;
+      '';
+
+      locations."/" = {
+        extraConfig = ''
+          try_files $uri $uri/ =404;
+          add_header Cache-Control "public, max-age=300, must-revalidate" always;
+          add_header X-Content-Type-Options nosniff always;
+        '';
+      };
+
+      locations."/packages/" = {
+        extraConfig = ''
+          add_header Cache-Control "public, max-age=31536000, immutable" always;
           add_header X-Content-Type-Options nosniff always;
         '';
       };

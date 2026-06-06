@@ -130,6 +130,7 @@
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMAlEwhbBOJor7VO1Bkv7jLM4aTzElFGSdduEMIz73d7 jelle@dev-debn-02"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICunYiTe1MOJsGC5OBn69bewMBS5bCCE1WayvM4DZLwE jelle@Jelles-MacBook-Pro.local"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHHigF4N4lR0UuIXB+bM7Mr52PMGurKPoe0Yjld3U/QB bougie CI publish"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDC+gfeoHgjUZEHWKhGW4UJq8z2GnfP43LBViQBP7y03 modulargento mirror"
     ];
   };
 
@@ -181,7 +182,7 @@
         ${pkgs.coreutils}/bin/rm /srv/index
       fi
 
-      install -d -o deploy -g deploy -m 0755 /srv/index /srv/blobs
+      install -d -o deploy -g deploy -m 0755 /srv/index /srv/blobs /srv/modulargento
       # bougie binary mirror tree. Both prefixes have to exist before
       # nginx starts so the `/github/` and `/installers/` location
       # blocks don't 404 on the first request (release.bougie.tools is
