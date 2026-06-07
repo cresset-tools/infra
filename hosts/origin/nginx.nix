@@ -335,9 +335,17 @@
         '';
       };
 
+      # The dist zips live at version-stable URLs (…/module-foo-3.0.0.zip), but
+      # the modulargento release republishes the SAME lockstep version (3.0.0)
+      # with new content on every rebuild — so the bytes at a given URL are NOT
+      # immutable (unlike the mage-os mirror, where a release version is final).
+      # Marking them immutable lets any HTTP cache (plain Composer, a proxy, a
+      # browser) serve a stale zip forever after a republish. Use a short TTL +
+      # must-revalidate so caches revalidate against the etag/last-modified
+      # nginx already emits (cheap 304s when unchanged, fresh bytes when not).
       locations."/packages/" = {
         extraConfig = ''
-          add_header Cache-Control "public, max-age=31536000, immutable" always;
+          add_header Cache-Control "public, max-age=300, must-revalidate" always;
           add_header X-Content-Type-Options nosniff always;
         '';
       };
