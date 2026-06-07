@@ -37,18 +37,17 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 224a613
-  # (#27 "Make the modulargento starter composer.json installable and complete";
-  # the fully-modular starter now builds from the real published project
-  # composer.json — carries require-dev/autoload-dev/license — and installs
-  # cleanly via bougie). Only PHP/JSON-resource/test files changed since the last
-  # pin — composer.lock / package-lock.json unchanged, so vendorHash +
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ eb0ab76
+  # (#28 "target PHP 8.4–8.5 and lock the version picker"; the fully-modular
+  # require.php is now ~8.4||~8.5 and the version dropdown is locked to 3.0.0
+  # while modulargento is selected). Only PHP/blade/test files changed since the
+  # last pin — composer.lock / package-lock.json unchanged, so vendorHash +
   # npmDepsHash below stay put — only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "224a6130dcde914691213fe371aeded3e75f8bc8";
-    hash = "sha256-sujEADosLBVdp1LzG8OjFHIUS4b6NCBpo0aWqHobL2M=";
+    rev = "eb0ab76bbe753ec753ebf8801712f44e2ce85e9e";
+    hash = "sha256-Iu0lhQa7xsfm5V1Vcy3ddE7Fv6JG50y0MSuPXLLhOxA=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
