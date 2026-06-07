@@ -46,8 +46,8 @@ let
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "75bd3ec3e4dc612493f381ac55fbce0e932f894c";
-    hash = "sha256-EN6U/z9GMbl+Vdd2CWHA2wska90Ri80KAaCDSUX5g5I=";
+    rev = "fe1318efa08d9d9edf5fcbd893e143754f07b65b";
+    hash = "sha256-bZlN3IaIM4FlbCVxhomQLzxG/ffIwcmBPuRVlY7c6fo=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
