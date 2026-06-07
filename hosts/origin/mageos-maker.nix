@@ -37,17 +37,18 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 2967e10
-  # (#26 "Make profiles compose with the modulargento distribution; lite gets
-  # very light"; builds on #25's Standard / Fully-modular toggle). Only
-  # PHP/YAML/blade/test files changed since the last pin — composer.lock /
-  # package-lock.json unchanged, so vendorHash + npmDepsHash below stay put —
-  # only rev + hash move.
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 224a613
+  # (#27 "Make the modulargento starter composer.json installable and complete";
+  # the fully-modular starter now builds from the real published project
+  # composer.json — carries require-dev/autoload-dev/license — and installs
+  # cleanly via bougie). Only PHP/JSON-resource/test files changed since the last
+  # pin — composer.lock / package-lock.json unchanged, so vendorHash +
+  # npmDepsHash below stay put — only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "2967e107879c106859bed25cc7ca8ea69c717651";
-    hash = "sha256-BF8UtPFHdPvRbg61NleZY24y8wpkFgNfEWt8Hma80Gg=";
+    rev = "224a6130dcde914691213fe371aeded3e75f8bc8";
+    hash = "sha256-sujEADosLBVdp1LzG8OjFHIUS4b6NCBpo0aWqHobL2M=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
