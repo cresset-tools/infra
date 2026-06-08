@@ -37,17 +37,17 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ eb0ab76
-  # (#28 "target PHP 8.4–8.5 and lock the version picker"; the fully-modular
-  # require.php is now ~8.4||~8.5 and the version dropdown is locked to 3.0.0
-  # while modulargento is selected). Only PHP/blade/test files changed since the
-  # last pin — composer.lock / package-lock.json unchanged, so vendorHash +
-  # npmDepsHash below stay put — only rev + hash move.
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 114099f
+  # (#43 "Add a mobile accordion layout for the configurator"; a single-column
+  # accordion rendering of the configurator that shows below a phone breakpoint,
+  # bound to the same Livewire state as the desktop shell). Only blade/CSS view
+  # files changed since the last pin — composer.lock / package-lock.json
+  # unchanged, so vendorHash + npmDepsHash below stay put — only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "fe1318efa08d9d9edf5fcbd893e143754f07b65b";
-    hash = "sha256-bZlN3IaIM4FlbCVxhomQLzxG/ffIwcmBPuRVlY7c6fo=";
+    rev = "114099f8a83299b8d84969315ce7a72d56dc8c9f";
+    hash = "sha256-RS5OwUXt/hKEDHuT9cS+j4h4m3K3k5rtPLhUW0KlBDY=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
