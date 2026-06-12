@@ -130,6 +130,7 @@
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMAlEwhbBOJor7VO1Bkv7jLM4aTzElFGSdduEMIz73d7 jelle@dev-debn-02"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICunYiTe1MOJsGC5OBn69bewMBS5bCCE1WayvM4DZLwE jelle@Jelles-MacBook-Pro.local"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHHigF4N4lR0UuIXB+bM7Mr52PMGurKPoe0Yjld3U/QB bougie CI publish"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPqy9AOUqeZwjB0kTtGnIwudncumdx1pT7B08g5JW7su wick CI publish"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDC+gfeoHgjUZEHWKhGW4UJq8z2GnfP43LBViQBP7y03 modulargento mirror"
     ];
   };
@@ -193,9 +194,14 @@
         /srv/releases/github/bougie \
         /srv/releases/github/bougie/releases \
         /srv/releases/github/bougie/releases/download \
+        /srv/releases/github/wick \
+        /srv/releases/github/wick/releases \
+        /srv/releases/github/wick/releases/download \
         /srv/releases/installers \
         /srv/releases/installers/bougie \
-        /srv/releases/installers/bougie/latest
+        /srv/releases/installers/bougie/latest \
+        /srv/releases/installers/wick \
+        /srv/releases/installers/wick/latest
       if [ ! -e /srv/index/index.json ]; then
         cat > /srv/index/index.json <<'JSON'
       {
