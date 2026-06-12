@@ -78,9 +78,9 @@ manifest that supplies the right `composer.json` (and recipe) so a full store
 comes up with one command. The built-in `mageos` alias scaffolds Mage-OS:
 
 ```sh
-# Create ./mystore, scaffold from the Mage-OS starter, and bring it all
-# the way up (toolchain + vendor + services + the project recipe).
-bougie new mystore --starter mageos --start
+# Create ./bougie-store, scaffold from the Mage-OS starter, and bring it
+# all the way up (toolchain + vendor + services + the project recipe).
+bougie new bougie-store --starter mageos --start
 
 # Equivalent in an existing/empty directory:
 bougie init --starter mageos --start
@@ -95,8 +95,8 @@ Add `--name vendor/package` to override the package name from the manifest.
 Without `--start` you scaffold only, then drive the steps yourself:
 
 ```sh
-bougie new mystore --starter mageos
-cd mystore
+bougie new bougie-store --starter mageos
+cd bougie-store
 bougie sync          # install PHP + extensions + vendor/
 bougie up -d         # start declared services (mariadb, redis, opensearch, …)
 bougie start         # run the Mage-OS install/setup recipe
