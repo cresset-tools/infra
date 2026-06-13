@@ -37,19 +37,19 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 352d392
-  # (#47 "Rebuild the configurator as the responsive Build Canvas"). Drops
-  # Livewire for the configurator page: it's now a plain Blade page driven by
-  # vanilla JS (resources/js/{maker-engine,build-canvas}.js) with a client-side
-  # derivation engine; the server is hit only at POST /api/build (composer.json
-  # + install tree) and POST /save. No new composer/npm deps — composer.lock /
-  # package-lock.json unchanged, so vendorHash + npmDepsHash below stay put —
-  # only rev + hash move.
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 58c47b1
+  # (#48 "Align spine timeline under the dots; version picker as a select box";
+  # small Build Canvas UI fixes on top of #47's responsive rewrite). The maker
+  # is a Blade page driven by vanilla JS (resources/js/{maker-engine,build-canvas}.js)
+  # with a client-side derivation engine; the server is hit only at POST
+  # /api/build (composer.json + install tree) and POST /save. No new composer/npm
+  # deps — composer.lock / package-lock.json unchanged, so vendorHash +
+  # npmDepsHash below stay put — only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "352d392cc3e014d012ec1e47eb4af6cc4eca5739";
-    hash = "sha256-ev26MVAn5K0SbKmAMyZVf05t8cV+AW9Y/7cjlNgsQLg=";
+    rev = "58c47b162f3ca32afc27b007cd35dffbace7bbed";
+    hash = "sha256-0hsFJyKtVgbjJEnGiaiE9NFNHXPe7d6wK6j6OGlxP8k=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
