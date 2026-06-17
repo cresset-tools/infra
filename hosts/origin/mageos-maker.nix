@@ -37,19 +37,21 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 58c47b1
-  # (#48 "Align spine timeline under the dots; version picker as a select box";
-  # small Build Canvas UI fixes on top of #47's responsive rewrite). The maker
-  # is a Blade page driven by vanilla JS (resources/js/{maker-engine,build-canvas}.js)
-  # with a client-side derivation engine; the server is hit only at POST
-  # /api/build (composer.json + install tree) and POST /save. No new composer/npm
-  # deps — composer.lock / package-lock.json unchanged, so vendorHash +
-  # npmDepsHash below stay put — only rev + hash move.
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 13a9033
+  # (#49 "fix(starter): emit a Hyvä slug placeholder instead of the server's":
+  # the shared starter.json no longer bakes this box's MAGEOS_HYVA_PROJECT slug
+  # into the generated composer.json — it emits a {{hyva_project}} placeholder
+  # that `bougie new --starter` prompts for). The maker is a Blade page driven
+  # by vanilla JS (resources/js/{maker-engine,build-canvas}.js) with a
+  # client-side derivation engine; the server is hit only at POST /api/build
+  # (composer.json + install tree) and POST /save. No new composer/npm deps —
+  # composer.lock / package-lock.json unchanged, so vendorHash + npmDepsHash
+  # below stay put — only rev + hash move.
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "58c47b162f3ca32afc27b007cd35dffbace7bbed";
-    hash = "sha256-0hsFJyKtVgbjJEnGiaiE9NFNHXPe7d6wK6j6OGlxP8k=";
+    rev = "13a90330002f3834e9d3053325a74366e42a0bfc";
+    hash = "sha256-SGjc1dlZtA4fZ9ndO0DaHm5ZskNJ3UUpVxOD090C9RQ=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
