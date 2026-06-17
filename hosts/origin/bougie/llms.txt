@@ -20,7 +20,7 @@ and the common paths.
 - **Machine-readable output:** pass `--format json-v1` for structured stdout.
   Default is `text`. Global flags `--quiet` (errors only) and `--verbose` also
   exist and work on every subcommand.
-- **Non-interactive:** anything that prompts (e.g. `services projects purge`)
+- **Non-interactive:** anything that prompts (e.g. `projects purge`)
   has a `--yes`/`-y` or `--dry-run` flag. Always pass one in automation.
 - **No Composer plugins or scripts.** bougie never runs `pre-/post-*` scripts
   or Composer plugins. Behaviors that normally come from plugins
@@ -63,9 +63,8 @@ bougie's).
   `bougie.toml`). bougie scaffolds and operates on the current working dir.
 - Config lives in `composer.json` plus optional `bougie.toml`; per-project PHP
   config fragments live under `.bougie/conf.d-*/`.
-- PHP interpreters, Composer phars, the cache, and global tools live outside
-  the project under `BOUGIE_HOME` / `BOUGIE_CACHE` (XDG-resolved; overridable
-  via those env vars).
+- PHP interpreters, the cache, and global tools live outside the project under
+  `BOUGIE_HOME` / `BOUGIE_CACHE` (XDG-resolved; overridable via those env vars).
 - **Tools** (`bougie tool`) are globally-installed, isolated PHP CLIs (think
   `uv tool` / `pipx`) — each with its own pinned PHP and vendor tree.
 - **Services** are shared dev daemons (one global process, per-project tenants)
@@ -97,10 +96,10 @@ Without `--start` you scaffold only, then drive the steps yourself:
 ```sh
 bougie new bougie-store --starter mageos
 cd bougie-store
-bougie sync          # install PHP + extensions + vendor/
-bougie up -d         # start declared services (mariadb, redis, opensearch, …)
-bougie start         # run the Mage-OS install/setup recipe
-bougie server        # register with the shared dev server + print the URL
+bougie sync                  # install PHP + extensions + vendor/
+bougie services up -d        # start declared services (mariadb, redis, opensearch, …)
+bougie start                 # run the Mage-OS install/setup recipe
+bougie server                # register with the shared dev server + print the URL
 ```
 
 ## Typical agent workflow
@@ -128,11 +127,11 @@ bougie run --with redis=6.0 -- php artisan ...   # ad-hoc extension for this run
 bougie run --xdebug -- php script.php  # layer xdebug + XDEBUG_SESSION=1
 
 # 5. Bring up declared dev services and the dev server
-bougie up -d                           # start declared services, detach
-bougie server --no-attach              # register with shared dev server, print URL
+bougie services up -d                  # start declared services, detach
+bougie server -d                       # register with shared dev server, print URL
 
 # 6. Recipe automation (Flex/Magento-style task DAG)
-bougie start                           # alias for `bougie make start`
+bougie start                           # bring the whole project up
 ```
 
 ## Command reference
@@ -146,12 +145,42 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
   — scaffold a project in the current dir.
 - `bougie new DIRECTORY [--toml] [--name …] [--starter …] [--start]`
   — create DIRECTORY and scaffold inside it.
-- `bougie sync [--offline] [--dry-run]` — install everything the project
-  requires (toolchain + extensions + `vendor/`). The workhorse.
-- `bougie run [--with EXT=VER]... [--no-sync] [--xdebug] -- ARGV...`
+- `bougie sync [--offline] [--dry-run] [--scripts | --no-scripts]` — install
+  everything the project requires (toolchain + extensions + `vendor/`). The
+  workhorse. Scripts are off by default; `--scripts` opts in.
+- `bougie run [--with EXT=VER]... [--no-sync] [--xdebug] [--php VER|PATH] -- ARGV...`
   — run a command in the project env. Ad-hoc extensions via `--with`.
+- `bougie start [--no-sync] [--dry-run] [--explain] [--no-builtin] [--recipe NAME]`
+  — bring the whole project up: sync the toolchain + vendor, provision and start
+  services, run any setup, start the dev server. Runs the detected recipe's
+  `start` task. Unix-only.
+- `bougie stop [NAMES...] [--purge]` — bring the project down: stop declared
+  services (or every service in `names`). The shared daemon and other projects'
+  tenants stay up. `--purge` destroys tenant data. Unix-only.
 - `bougie make [TASK] [--list] [--dry-run] [--explain] [--no-sync] [--no-builtin] [--recipe NAME] [--print]`
-  — run a recipe DAG (freshness-gated). `bougie start` == `bougie make start`.
+  — run a named recipe task (freshness-gated). With no task, lists available
+  tasks. `bougie make start` runs the `start` task via `make` — for the full
+  project bring-up lifecycle, prefer the dedicated `bougie start` verb.
+
+### Package management — `bougie add`, `bougie remove`, `bougie lock`, `bougie tree`, `bougie outdated`
+
+uv-style top-level package verbs. Use `bougie composer require/update` for
+full Composer-compatible flag parity.
+
+- `bougie add PACKAGES... [--dev] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-sync] [--frozen] [-d DIR] [--dry-run]`
+  — bare `vendor/pkg` writes a `>=X.Y` lower bound; explicit constraint uses
+  `@` syntax (`vendor/pkg@^1.0`). Edits `composer.json`, re-resolves
+  `composer.lock`, installs into `vendor/`. `--no-sync` stops after the lock;
+  `--frozen` edits `composer.json` only.
+- `bougie remove PACKAGES... [--dev] [--no-sync] [--frozen] [-d DIR] [--dry-run]`
+- `bougie lock [-d DIR] [--dry-run]` — minimal lock refresh: reconcile
+  `composer.lock` with `composer.json`, holding each package at its locked
+  version where still valid, re-resolving only what changed. Never bumps
+  versions, never installs. Content-hash match → offline no-op.
+- `bougie tree [PACKAGE] [--no-dev] [-d DIR]` — print the dependency tree
+  (reads `composer.lock`).
+- `bougie outdated [PACKAGES...] [-D|--direct] [--major-only] [--minor-only] [--patch-only] [--no-dev] [--strict] [-d DIR]`
+  — list installed packages with a newer version available.
 
 ### PHP interpreters — `bougie php`
 
@@ -165,6 +194,14 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
 
 Version request grammar: `8.3`, `8.3.12`, `8.3+zts`, constraints like `~8.3`.
 
+### Node.js — `bougie node`
+
+- `install [REQUESTS...]` — install from nodejs.org (`latest`, `lts`, `20`, `20.11`, `20.11.0`).
+- `uninstall REQUESTS...`
+- `list` — list installed Node.js versions.
+- `find [REQUEST]` — resolve a request, print version + URL without installing.
+- `dir` — print the Node.js install directory.
+
 ### Extensions — `bougie ext`
 
 - `add ARGS... [--no-sync]` — each arg is an extension name (`redis`,
@@ -177,20 +214,33 @@ Version request grammar: `8.3`, `8.3.12`, `8.3+zts`, constraints like `~8.3`.
 
 ### Composer — `bougie composer`
 
-`install`, `update`, `validate`, and `dump-autoload(er)` are **native**
-reimplementations (byte-equivalent to Composer 2.8.12). Every other subcommand
-(`require`, `remove`, `show`, `why`, `outdated`, `audit`, `create-project`, …)
-is forwarded verbatim to the project's pinned Composer phar, run with the
-project's PHP, conf.d, and `vendor/bin` on PATH.
+All listed subcommands are **native** reimplementations (byte-equivalent to
+Composer 2.8.12 where applicable). bougie does **not** bundle or execute the
+Composer phar. An unrecognized subcommand (`create-project`, `archive`,
+`bump`, …) errors with a pointer to `bougie tool install composer/composer`
+for the full upstream Composer.
 
-- `install [-d|--working-dir DIR] [--no-dev] [--frozen] [--lock-verify] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
+- `install [-d|--working-dir DIR] [--no-dev] [--frozen] [--lock-verify] [--ignore-platform-reqs] [--ignore-platform-req REQ] [--scripts | --no-scripts]`
   — install `vendor/` from `composer.lock` (content-hash verified).
-- `update [-d DIR] [--no-dev] [--dry-run] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
-  — re-resolve from `composer.json`, write a fresh `composer.lock`.
+- `update [PACKAGES...] [-d DIR] [--no-dev] [--dry-run] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-install] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
+  (aliases `upgrade`, `u`) — re-resolve from `composer.json`, write a fresh
+  `composer.lock`. Name packages for a partial update.
+- `require PACKAGES... [--dev] [--no-update] [--no-install] [-w] [-W] [--prefer-lowest] [--ignore-platform-reqs] [--ignore-platform-req REQ] [-d DIR] [--dry-run]`
+  — Composer-compatible (`:` / `=` / space constraint separators; use top-level
+  `bougie add` for bougie's `@`-syntax `>=`-default house style).
+- `remove PACKAGES... [--dev] [--no-update] [--no-install] [--no-dev] [--ignore-platform-reqs] [--ignore-platform-req REQ] [-d DIR] [--dry-run]`
+- `show [PACKAGE] [-t|--tree] [-D|--direct] [-p|--platform] [-s|--self] [-N|--name-only] [-P|--path] [-l|--latest] [-o|--outdated] [--no-dev] [-d DIR]`
+  (aliases `info`, `list`)
+- `why PACKAGE [-r|--recursive] [-t|--tree] [-d DIR]` (alias `depends`)
+- `why-not PACKAGE [VERSION] [-r|--recursive] [-t|--tree] [-d DIR]` (alias `prohibits`)
+- `outdated [PACKAGES...] [-D|--direct] [--major-only] [--minor-only] [--patch-only] [--no-dev] [--strict] [-d DIR]`
+- `audit [--no-dev] [--abandoned ignore|report|fail] [--locked] [-d DIR]`
+- `licenses [--no-dev] [-d DIR]`
+- `status [-d DIR]`
+- `fund [--no-dev] [-d DIR]`
 - `validate [-d DIR] [--strict] [--no-check-lock] [--no-check-publish] [--no-check-all] [--with-dependencies] [--check-lock]`
 - `dump-autoloader` (alias `dump-autoload`)
   `[-o|--optimize] [-a|--classmap-authoritative] [--no-dev] [--apcu-autoloader] [--apcu-autoloader-prefix PREFIX] [--autoloader-suffix SUFFIX] [-d DIR]`
-- `<anything-else> ...` — forwarded to the real Composer.
 
 ### Global tools — `bougie tool` (alias runner: `bgx`)
 
@@ -201,52 +251,65 @@ Isolated, globally-installed PHP CLIs. Identifier is `vendor/name[@constraint]`.
 - `inject PACKAGE --with PKG_OR_EXT...` / `uninject PACKAGE --with PKG_OR_EXT...`
 - `list`
 - `dir [PACKAGE]` — tool's dir, or the tools root.
-- `run PACKAGE [--php VER] [--with PKG_OR_EXT]... -- ARGS...` — one-off run,
+- `run PACKAGE [--php VER] [--with PKG_OR_EXT]... ARGS...` — one-off run,
   reusing a matching persistent install or materializing into the cache.
+  No `--` separator needed; everything after `PACKAGE` is forwarded verbatim.
   **`bgx` is a top-level shortcut for `bougie tool run`** (e.g.
-  `bgx phpstan/phpstan -- analyse src`).
+  `bgx phpstan/phpstan analyse src`).
 - `upgrade [PACKAGE] [--all] [--reinstall]`
 
-### Dev services — `bougie services` (+ top-level `up`/`down`)
+### Dev services — `bougie services`
 
 Shared daemons with per-project tenants, supervised by `bougied`. Catalog
 includes mariadb, redis, opensearch, rabbitmq, mkcert, bougie-server.
 
-- `bougie up [NAMES...] [-d|--detach]` — start declared (or named) services and
-  provision this project's tenant. Attaches to the combined log unless
-  detached (non-TTY / json always detaches).
-- `bougie down [NAMES...] [--purge]` — stop this project's services; global
-  process stays up while other tenants remain. `--purge` destroys tenant data.
+- `bougie services up [NAMES...] [-d|--detach]` — start declared (or named)
+  services and provision this project's tenant. Attaches to the combined log
+  unless detached (non-TTY / json always detaches).
+- `bougie services down [NAMES...] [--purge]` — stop this project's services;
+  global process stays up while other tenants remain. `--purge` destroys
+  tenant data.
 - `bougie services add NAMES...` (each optionally `@version`)
 - `bougie services remove NAMES... [--purge]`
 - `bougie services list [--all]`
-- `bougie services projects [--alloc]` — list every provisioned tenant across
-  shared services and its owning project (reads on-disk ledgers; no daemon).
-- `bougie services projects purge [--project PATH | --all] [--dry-run] [-y|--yes]`
-  — deprovision tenants (orphaned-by-default). **Destructive; confirms unless
-  `--yes`/`--dry-run`.**
 - `bougie services catalog` — print the built-in catalog (no daemon).
 - `bougie services restart [NAMES...]`
 - `bougie services status [NAME]`
 - `bougie services logs [NAME] [-f|--follow] [-n|--lines N]`
 - `bougie services daemon {status,stop,version}` — inspect/control `bougied`.
 
+### Cross-project tenants — `bougie projects`
+
+- `bougie projects list [--alloc]` — list every provisioned tenant across
+  shared services and its owning project (reads on-disk ledgers; no daemon).
+- `bougie projects purge [--project PATH | --all] [--dry-run] [-y|--yes]`
+  — deprovision tenants (orphaned-by-default). **Destructive; confirms unless
+  `--yes`/`--dry-run`.**
+
 ### Dev server — `bougie server`
 
 With no subcommand: register the current project with the shared dev server,
 print its `<name>.bougie.run` URL, and stream its log (Ctrl-C detaches).
 
-- `bougie server [NAME] [--open] [--tls] [--no-attach] [--no-sync]`
+- `bougie server [NAME] [--open] [--tls] [-d|--detach] [--no-sync]`
 - `bougie server run --config PATH [--listen ADDR] [--log-format FMT]`
   — low-level foreground primitive against an explicit multi-host `server.toml`
   (what `bougied` spawns; CI / power users).
 - `bougie server status [--config PATH]` (alias `list`) — hosts + live pool.
 - `bougie server open [NAME]`
-- `bougie server stop` — stop the shared server (== `bougie down server`).
+- `bougie server stop` — stop the shared server (== `bougie services down server`).
 - `bougie server logs [-f] [-n N]`
 - `bougie server tls {install,uninstall}` — local CA via mkcert.
 - `bougie server hosts apply [--config PATH]` — rewrite the `/etc/hosts` block
   (needs root; runs via sudo).
+
+### Format — `bougie format`
+
+- `bougie format [ARGS...]` — format the project's PHP. Downloads and caches a
+  pinned `wick` binary (cresset-tools/wick — unconfigurable, Laravel Pint-style)
+  on first use. Every argument is forwarded verbatim to `wick` (`--check`,
+  `--diff`, paths, `-` for stdin). Pin a specific wick release with
+  `BOUGIE_WICK_VERSION`. Cross-platform.
 
 ### Cache & self — `bougie cache`, `bougie self`
 
@@ -261,6 +324,6 @@ print its `<name>.bougie.run` URL, and stream its log (Ctrl-C detaches).
 - To run any PHP/composer/artisan command in the right environment, wrap it in
   `bougie run -- …` rather than calling system `php`/`composer` directly.
 - For one-off linters/static analysis without polluting the project, use
-  `bgx vendor/tool -- <args>`.
+  `bgx vendor/tool <args>` (no `--` needed).
 - Service and server operations need the Unix-only `bougied` daemon; on Windows
   only `bougie server` (foreground, via `php-cgi.exe`) is available.
