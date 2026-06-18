@@ -37,23 +37,23 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 9dfc59c
-  # (#50 "feat(starter): emit an `auth` block for the Hyvä license key":
-  # the starter.json now also emits an `auth` entry for
-  # hyva-themes.repo.packagist.com — bougie prompts for the license key and
-  # stores it in its own credential store, on top of the {{hyva_project}}
-  # slug placeholder from #49). The maker is a Blade page driven by vanilla
-  # JS (resources/js/{maker-engine,build-canvas}.js) with a client-side
-  # derivation engine; the server is hit only at POST /api/build
-  # (composer.json + install tree) and POST /save. No new composer/npm deps —
-  # composer.lock / package-lock.json unchanged, so vendorHash + npmDepsHash
-  # below stay put — only rev + hash move. (Bump with
-  # scripts/update-mageos-maker.sh.)
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ ff60c0a
+  # (#51 "feat(definitions): force GraphQL on when the Hyvä theme is selected":
+  # selecting the Hyvä theme now locks the GraphQL API layer on, since Hyvä's
+  # storefront is GraphQL-first; also includes #50 "emit an `auth` block for the
+  # Hyvä license key" — the starter manifest now declares the licensed-repo
+  # token via an `auth` block so `bougie new --starter` prompts for it rather
+  # than baking it in). The maker is a Blade page driven by vanilla JS
+  # (resources/js/{maker-engine,build-canvas}.js) with a client-side derivation
+  # engine; the server is hit only at POST /api/build (composer.json + install
+  # tree) and POST /save. No new composer/npm deps — composer.lock /
+  # package-lock.json unchanged, so vendorHash + npmDepsHash below stay put —
+  # only rev + hash move. (Bump with scripts/update-mageos-maker.sh.)
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "9dfc59cd5c34f86c5fdacee704cbd318a88d2ef0";
-    hash = "sha256-ZypoFLHh0LYTY2wCW8B9Ii5M4wxwGMMh+fgtedxAXdw=";
+    rev = "ff60c0a232cf376ed225870b515061ec6d3dc9b2";
+    hash = "sha256-Q2IJfb/+VLhm4/GVWs7kCuVjrUO0DYzAsvkpkmZ6c/E=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
