@@ -85,9 +85,9 @@ bougie new bougie-store --starter mageos --start
 bougie init --starter mageos --start
 ```
 
-`--starter` takes a built-in alias (e.g. `mageos`) or an `https` URL serving a
-starter manifest; it writes the starter's `composer.json` instead of the empty
-default. `--start` runs `bougie start` after scaffolding (== `bougie make
+`--starter` takes a built-in alias (`mageos`, `laravel`) or an `https` URL
+serving a starter manifest; it writes the starter's `composer.json` instead of
+the empty default. `--start` runs `bougie start` after scaffolding (== `bougie make
 start`: sync the toolchain + vendor, then run the project recipe — Unix-only).
 Add `--name vendor/package` to override the package name from the manifest.
 
@@ -110,7 +110,7 @@ bougie new myapp                       # create ./myapp and scaffold
 #   or: bougie init                    # scaffold in the current dir
 #   add --toml to put bougie config in bougie.toml
 #   add --name vendor/package to set the package name
-#   add --starter mageos to scaffold from a starter pack (Mage-OS)
+#   add --starter mageos or --starter laravel to scaffold from a starter pack
 
 cd myapp
 
