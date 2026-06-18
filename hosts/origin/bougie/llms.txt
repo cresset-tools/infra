@@ -145,9 +145,10 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
   — scaffold a project in the current dir.
 - `bougie new DIRECTORY [--toml] [--name …] [--starter …] [--start]`
   — create DIRECTORY and scaffold inside it.
-- `bougie sync [--offline] [--dry-run] [--scripts | --no-scripts]` — install
-  everything the project requires (toolchain + extensions + `vendor/`). The
-  workhorse. Scripts are off by default; `--scripts` opts in.
+- `bougie sync [--offline] [--dry-run] [--scripts | --no-scripts] [--patches | --no-patches]`
+  — install everything the project requires (toolchain + extensions + `vendor/`).
+  The workhorse. Scripts are off by default; `--scripts` opts in. Patches are on
+  by default when declared; `--no-patches` suppresses them.
 - `bougie run [--with EXT=VER]... [--no-sync] [--xdebug] [--php VER|PATH] -- ARGV...`
   — run a command in the project env. Ad-hoc extensions via `--with`.
 - `bougie start [--no-sync] [--dry-run] [--explain] [--no-builtin] [--recipe NAME]`
@@ -212,6 +213,29 @@ Version request grammar: `8.3`, `8.3.12`, `8.3+zts`, constraints like `~8.3`.
 - `remove NAMES... [--no-sync]`
 - `list [--only-installed] [--only-available] [--all-versions] [--all-platforms] [--show-urls]`
 
+### Patch management — `bougie patches`
+
+Native cweagans-style patch management. Patches are declared in the root
+`composer.json` (under `extra.patches`) or an external patches file and applied
+to vendor packages during `bougie sync` / `bougie composer install`. Applied by
+default when patches are declared; suppress with `--no-patches`.
+
+- `bougie patches add SOURCE [--package VENDOR/PKG] [--description TEXT] [--depth N] [--to-file] [--no-sync]`
+  — declare a root patch rule from an `https://` URL or a local file. The target
+  package is inferred from the diff headers unless `--package` is given.
+- `bougie patches list` — show the resolved patch set, plus any unadopted
+  dependency-declared patches (which bougie never applies automatically).
+- `bougie patches import [PACKAGES...] [--all] [--to-file]` — adopt
+  dependency-declared patches into the root `composer.json` (the only way a
+  dependency's patches ever apply).
+- `bougie patches repatch [PACKAGES...]` — force a clean re-extract + re-apply
+  for the named packages (or all): drops recorded fingerprints, then syncs.
+- `bougie patches relock` — rebuild `patches.lock.json` from current config:
+  re-download remote patches and re-apply everything from pristine.
+- `bougie patches doctor` — diagnose patch configuration: unresolvable
+  `patches/` files, `http://` URLs, missing checksums, unadopted dependency
+  patches.
+
 ### Composer — `bougie composer`
 
 All listed subcommands are **native** reimplementations (byte-equivalent to
@@ -220,7 +244,7 @@ Composer phar. An unrecognized subcommand (`create-project`, `archive`,
 `bump`, …) errors with a pointer to `bougie tool install composer/composer`
 for the full upstream Composer.
 
-- `install [-d|--working-dir DIR] [--no-dev] [--frozen] [--lock-verify] [--ignore-platform-reqs] [--ignore-platform-req REQ] [--scripts | --no-scripts]`
+- `install [-d|--working-dir DIR] [--no-dev] [--frozen] [--lock-verify] [--ignore-platform-reqs] [--ignore-platform-req REQ] [--scripts | --no-scripts] [--patches | --no-patches]`
   — install `vendor/` from `composer.lock` (content-hash verified).
 - `update [PACKAGES...] [-d DIR] [--no-dev] [--dry-run] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-install] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
   (aliases `upgrade`, `u`) — re-resolve from `composer.json`, write a fresh
