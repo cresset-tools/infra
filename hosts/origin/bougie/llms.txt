@@ -145,11 +145,14 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
   — scaffold a project in the current dir.
 - `bougie new DIRECTORY [--toml] [--name …] [--starter …] [--start]`
   — create DIRECTORY and scaffold inside it.
-- `bougie sync [--offline] [--dry-run] [--scripts | --no-scripts] [--patches | --no-patches]`
+- `bougie sync [--offline] [--dry-run] [--scripts | --no-scripts] [--patches | --no-patches] [--resolution STRATEGY] [--managed-php | --no-managed-php] [--no-php-downloads]`
   — install everything the project requires (toolchain + extensions + `vendor/`).
   The workhorse. Scripts are off by default; `--scripts` opts in. Patches are on
-  by default when declared; `--no-patches` suppresses them.
-- `bougie run [--with EXT=VER]... [--no-sync] [--xdebug] [--php VER|PATH] -- ARGV...`
+  by default when declared; `--no-patches` suppresses them. `--resolution`
+  applies when a fresh lock must be resolved. PHP source: `--managed-php` (only
+  bougie-managed), `--no-managed-php` (only system), `--no-php-downloads` (no
+  auto-download).
+- `bougie run [--with EXT=VER]... [--no-sync] [--xdebug] [--php VER|PATH] [--managed-php | --no-managed-php] [--no-php-downloads] -- ARGV...`
   — run a command in the project env. Ad-hoc extensions via `--with`.
 - `bougie start [--no-sync] [--dry-run] [--explain] [--no-builtin] [--recipe NAME]`
   — bring the whole project up: sync the toolchain + vendor, provision and start
@@ -168,13 +171,13 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
 uv-style top-level package verbs. Use `bougie composer require/update` for
 full Composer-compatible flag parity.
 
-- `bougie add PACKAGES... [--dev] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-sync] [--frozen] [-d DIR] [--dry-run]`
+- `bougie add PACKAGES... [--dev] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-sync] [--frozen] [--resolution STRATEGY] [-d DIR] [--dry-run]`
   — bare `vendor/pkg` writes a `>=X.Y` lower bound; explicit constraint uses
   `@` syntax (`vendor/pkg@^1.0`). Edits `composer.json`, re-resolves
   `composer.lock`, installs into `vendor/`. `--no-sync` stops after the lock;
   `--frozen` edits `composer.json` only.
 - `bougie remove PACKAGES... [--dev] [--no-sync] [--frozen] [-d DIR] [--dry-run]`
-- `bougie lock [-d DIR] [--dry-run]` — minimal lock refresh: reconcile
+- `bougie lock [--resolution STRATEGY] [-d DIR] [--dry-run]` — minimal lock refresh: reconcile
   `composer.lock` with `composer.json`, holding each package at its locked
   version where still valid, re-resolving only what changed. Never bumps
   versions, never installs. Content-hash match → offline no-op.
@@ -205,7 +208,7 @@ Version request grammar: `8.3`, `8.3.12`, `8.3+zts`, constraints like `~8.3`.
 
 ### Extensions — `bougie ext`
 
-- `add ARGS... [--no-sync]` — each arg is an extension name (`redis`,
+- `add ARGS... [--no-sync] [--managed-php | --no-managed-php] [--no-php-downloads]` — each arg is an extension name (`redis`,
   `xdebug@3.5.1`) fetched from the index and recorded in composer.json, **or**
   a path to a local `.so` (anything ending in `.so`) copied into the store with
   auto-detected name/Zend-ness and a `.bougie/conf.d-local/` fragment (no
@@ -246,7 +249,7 @@ for the full upstream Composer.
 
 - `install [-d|--working-dir DIR] [--no-dev] [--frozen] [--lock-verify] [--ignore-platform-reqs] [--ignore-platform-req REQ] [--scripts | --no-scripts] [--patches | --no-patches]`
   — install `vendor/` from `composer.lock` (content-hash verified).
-- `update [PACKAGES...] [-d DIR] [--no-dev] [--dry-run] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-install] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
+- `update [PACKAGES...] [-d DIR] [--no-dev] [--dry-run] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-install] [--ignore-platform-reqs] [--ignore-platform-req REQ] [--resolution STRATEGY] [--prefer-lowest]`
   (aliases `upgrade`, `u`) — re-resolve from `composer.json`, write a fresh
   `composer.lock`. Name packages for a partial update.
 - `require PACKAGES... [--dev] [--no-update] [--no-install] [-w] [-W] [--prefer-lowest] [--ignore-platform-reqs] [--ignore-platform-req REQ] [-d DIR] [--dry-run]`
