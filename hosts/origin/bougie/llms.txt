@@ -204,7 +204,7 @@ Version request grammar: `8.3`, `8.3.12`, `8.3+zts`, constraints like `~8.3`.
 - `uninstall REQUESTS...`
 - `list` — list installed Node.js versions.
 - `find [REQUEST]` — resolve a request, print version + URL without installing.
-- `dir` — print the Node.js install directory.
+- `dir` — print the Node.js installation directory.
 
 ### Extensions — `bougie ext`
 
@@ -288,7 +288,7 @@ Isolated, globally-installed PHP CLIs. Identifier is `vendor/name[@constraint]`.
 ### Dev services — `bougie services`
 
 Shared daemons with per-project tenants, supervised by `bougied`. Catalog
-includes mariadb, redis, opensearch, rabbitmq, mkcert, bougie-server.
+includes mariadb, redis, opensearch, rabbitmq, mailpit, mkcert, bougie-server.
 
 - `bougie services up [NAMES...] [-d|--detach]` — start declared (or named)
   services and provision this project's tenant. Attaches to the combined log
