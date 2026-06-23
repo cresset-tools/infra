@@ -231,13 +231,15 @@
       };
     };
 
-    # bougie.tools apex — static homepage + the two installer redirects.
+    # bougie.tools apex — static homepage + the installer redirects.
     # `curl -LsSf https://bougie.tools/install.sh | sh` is the public
     # one-liner; the exact-match install.sh / install.ps1 locations take
     # precedence over the catch-all `/`, so the one-liner keeps working
-    # alongside the homepage. The site is a single self-contained
-    # `index.html` (no external assets) in ./bougie, copied into the store
-    # at build time — edit it and `nix run .#switch -- origin <ip>`.
+    # alongside the homepage. wick.sh / wick.ps1 are the same trick for
+    # the wick formatter (short alias for its releases-mirror installer).
+    # The site is a single self-contained `index.html` (no external
+    # assets) in ./bougie, copied into the store at build time — edit it
+    # and `nix run .#switch -- origin <ip>`.
     virtualHosts."bougie.tools" = {
       enableACME = true;
       forceSSL = true;
@@ -262,6 +264,18 @@
       locations."= /install.ps1" = {
         extraConfig = ''
           return 301 https://releases.bougie.tools/installers/bougie/latest/bougie-installer.ps1;
+        '';
+      };
+
+      locations."= /wick.sh" = {
+        extraConfig = ''
+          return 301 https://releases.bougie.tools/installers/wick/latest/wick-installer.sh;
+        '';
+      };
+
+      locations."= /wick.ps1" = {
+        extraConfig = ''
+          return 301 https://releases.bougie.tools/installers/wick/latest/wick-installer.ps1;
         '';
       };
 

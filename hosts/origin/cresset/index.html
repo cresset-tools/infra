@@ -7,9 +7,9 @@
   <title>cresset.tools - fancy PHP tooling</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <meta name="description"
-    content="cresset.tools builds fast, carefully-made developer tools for the PHP ecosystem. Home of bougie.">
+    content="cresset.tools builds fast, carefully-made developer tools for the PHP ecosystem. Home of bougie, mageos-maker and wick.">
   <meta property="og:title" content="cresset.tools — developer tools for PHP">
-  <meta property="og:description" content="Fast, carefully-made developer tools for the PHP ecosystem. Home of bougie.">
+  <meta property="og:description" content="Fast, carefully-made developer tools for the PHP ecosystem. Home of bougie, mageos-maker and wick.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://cresset.tools/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -276,6 +276,40 @@
           Install now or learn more at <a href="https://bougie.tools">bougie.tools</a>.
         </p>
         <cmd-line><cmd-prompt>$</cmd-prompt><code>curl -LsSf https://bougie.tools/install.sh | sh</code></cmd-line>
+      </tool-entry>
+      <tool-entry>
+        <tool-head>
+          <tool-name>mageos-maker<name-dot>.</name-dot></tool-name>
+          <layout-spacer></layout-spacer>
+          <a href="https://mageos-maker.cresset.tools">mageos-maker.cresset.tools →</a>
+        </tool-head>
+        <p>
+          Pick your Mage-OS version, Hyvä theme and API layers in the browser.
+          It figures out which package versions actually fit together and hands you a
+          <code>composer.json</code> and install tree.
+        </p>
+        <p>
+          Hand the result to bougie and your store's running. Build yours at
+          <a href="https://mageos-maker.cresset.tools">mageos-maker.cresset.tools</a>.
+        </p>
+        <cmd-line><cmd-prompt>$</cmd-prompt><code>bougie new my-store --starter https://mageos-maker.cresset.tools/c/0190f8a2-3b4c-7d1e-8f2a-1c2d3e4f5a6b --start</code></cmd-line>
+      </tool-entry>
+      <tool-entry>
+        <tool-head>
+          <tool-name>wick<name-dot>.</name-dot></tool-name>
+          <layout-spacer></layout-spacer>
+          <a href="https://github.com/cresset-tools/wick">github.com/cresset-tools/wick →</a>
+        </tool-head>
+        <p>
+          A PHP formatter with nothing to configure. Run it and your code comes
+          out formatted, the same way every time. Pint-style, powered by Mago,
+          really fast.
+        </p>
+        <p>
+          Install it on its own, or don't bother — <code>bougie format</code>
+          grabs wick and runs it for you.
+        </p>
+        <cmd-line><cmd-prompt>$</cmd-prompt><code>curl -LsSf https://bougie.tools/wick.sh | sh</code></cmd-line>
       </tool-entry>
       <tool-soon>
         <soon-name>// more on the way</soon-name>
