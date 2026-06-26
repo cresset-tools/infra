@@ -37,23 +37,21 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ ff60c0a
-  # (#51 "feat(definitions): force GraphQL on when the Hyvä theme is selected":
-  # selecting the Hyvä theme now locks the GraphQL API layer on, since Hyvä's
-  # storefront is GraphQL-first; also includes #50 "emit an `auth` block for the
-  # Hyvä license key" — the starter manifest now declares the licensed-repo
-  # token via an `auth` block so `bougie new --starter` prompts for it rather
-  # than baking it in). The maker is a Blade page driven by vanilla JS
-  # (resources/js/{maker-engine,build-canvas}.js) with a client-side derivation
-  # engine; the server is hit only at POST /api/build (composer.json + install
-  # tree) and POST /save. No new composer/npm deps — composer.lock /
-  # package-lock.json unchanged, so vendorHash + npmDepsHash below stay put —
-  # only rev + hash move. (Bump with scripts/update-mageos-maker.sh.)
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 00f4eb0
+  # ("chore: add Plausible analytics to layout": loads the privacy-friendly
+  # Plausible script (analytics.yele.dev) from the app layout <head>, so it
+  # covers the configurator and saved-config pages). The maker is a Blade page
+  # driven by vanilla JS (resources/js/{maker-engine,build-canvas}.js) with a
+  # client-side derivation engine; the server is hit only at POST /api/build
+  # (composer.json + install tree) and POST /save. No new composer/npm deps —
+  # composer.lock / package-lock.json unchanged, so vendorHash + npmDepsHash
+  # below stay put — only rev + hash move. (Bump with
+  # scripts/update-mageos-maker.sh.)
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "5c95d299b0ba5f4337d4af93c263137621da0999";
-    hash = "sha256-SoMkofoz4KIET2QeEyQvwH0bc2bJwN0dilh1crw0hW0=";
+    rev = "00f4eb0b627ea1d8e1073141634d67e6e7387769";
+    hash = "sha256-UCBR9x3D0hENJ593Mx+xP2C9EIr12KYhOXK6Ic3VUYQ=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
