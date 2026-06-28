@@ -226,6 +226,11 @@ default when patches are declared; suppress with `--no-patches`.
 - `bougie patches add SOURCE [--package VENDOR/PKG] [--description TEXT] [--depth N] [--to-file] [--no-sync]`
   — declare a root patch rule from an `https://` URL or a local file. The target
   package is inferred from the diff headers unless `--package` is given.
+- `bougie patches create VENDOR/PACKAGE [--output PATH] [--stdout]`
+  — author a patch from hand-edited `vendor/` files: diff the installed package
+  against its originally-installed (pristine) contents and write a clean patch
+  into the `patches/` directory, where bougie auto-discovers and re-applies it
+  on the next `sync`. Pass `--stdout` to print the diff instead of writing a file.
 - `bougie patches list` — show the resolved patch set, plus any unadopted
   dependency-declared patches (which bougie never applies automatically).
 - `bougie patches import [PACKAGES...] [--all] [--to-file]` — adopt
