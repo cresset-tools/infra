@@ -145,7 +145,7 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
   — scaffold a project in the current dir.
 - `bougie new DIRECTORY [--toml] [--name …] [--starter …] [--start]`
   — create DIRECTORY and scaffold inside it.
-- `bougie sync [--offline] [--dry-run] [--scripts | --no-scripts] [--patches | --no-patches] [--resolution STRATEGY] [--managed-php | --no-managed-php] [--no-php-downloads]`
+- `bougie sync [--offline] [--dry-run] [--scripts | --no-scripts] [--patches | --no-patches] [--resolution STRATEGY] [--managed-php | --no-managed-php] [--no-php-downloads] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
   — install everything the project requires (toolchain + extensions + `vendor/`).
   The workhorse. Scripts are off by default; `--scripts` opts in. Patches are on
   by default when declared; `--no-patches` suppresses them. `--resolution`
@@ -171,13 +171,13 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
 uv-style top-level package verbs. Use `bougie composer require/update` for
 full Composer-compatible flag parity.
 
-- `bougie add PACKAGES... [--dev] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-sync] [--frozen] [--resolution STRATEGY] [-d DIR] [--dry-run]`
+- `bougie add PACKAGES... [--dev] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-sync] [--frozen] [--resolution STRATEGY] [-d DIR] [--dry-run] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
   — bare `vendor/pkg` writes a `>=X.Y` lower bound; explicit constraint uses
   `@` syntax (`vendor/pkg@^1.0`). Edits `composer.json`, re-resolves
   `composer.lock`, installs into `vendor/`. `--no-sync` stops after the lock;
   `--frozen` edits `composer.json` only.
-- `bougie remove PACKAGES... [--dev] [--no-sync] [--frozen] [-d DIR] [--dry-run]`
-- `bougie lock [--resolution STRATEGY] [-d DIR] [--dry-run]` — minimal lock refresh: reconcile
+- `bougie remove PACKAGES... [--dev] [--no-sync] [--frozen] [-d DIR] [--dry-run] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
+- `bougie lock [--resolution STRATEGY] [-d DIR] [--dry-run] [--ignore-platform-reqs] [--ignore-platform-req REQ]` — minimal lock refresh: reconcile
   `composer.lock` with `composer.json`, holding each package at its locked
   version where still valid, re-resolving only what changed. Never bumps
   versions, never installs. Content-hash match → offline no-op.
