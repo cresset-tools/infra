@@ -62,7 +62,7 @@ bougie's).
 - A **project** is a directory with `composer.json` (and optionally
   `bougie.toml`). bougie scaffolds and operates on the current working dir.
 - Config lives in `composer.json` plus optional `bougie.toml`; per-project PHP
-  config fragments live under `.bougie/conf.d-*/`.
+  config fragments live under `vendor/bougie/conf.d{,-debug}/`.
 - PHP interpreters, the cache, and global tools live outside the project under
   `BOUGIE_HOME` / `BOUGIE_CACHE` (XDG-resolved; overridable via those env vars).
 - **Tools** (`bougie tool`) are globally-installed, isolated PHP CLIs (think
@@ -211,8 +211,9 @@ Version request grammar: `8.3`, `8.3.12`, `8.3+zts`, constraints like `~8.3`.
 - `add ARGS... [--no-sync] [--managed-php | --no-managed-php] [--no-php-downloads]` — each arg is an extension name (`redis`,
   `xdebug@3.5.1`) fetched from the index and recorded in composer.json, **or**
   a path to a local `.so` (anything ending in `.so`) copied into the store with
-  auto-detected name/Zend-ness and a `.bougie/conf.d-local/` fragment (no
-  composer.json change). Mix both in one call.
+  auto-detected name/Zend-ness and a fragment written to the durable,
+  machine-local `conf.d-local/` under `$BOUGIE_HOME` (not part of the project
+  tree; no composer.json change). Mix both in one call.
 - `remove NAMES... [--no-sync]`
 - `list [--only-installed] [--only-available] [--all-versions] [--all-platforms] [--show-urls]`
 
