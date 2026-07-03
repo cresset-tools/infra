@@ -29,8 +29,6 @@
           })
         ];
       };
-      hostSystem = "aarch64-linux";
-
       # Every directory under ./hosts/ becomes a nixosConfigurations entry.
       # Each host dir must contain configuration.nix; disko.nix is optional
       # (omit on hosts where the disk layout was set up another way).
@@ -42,6 +40,15 @@
         let
           hostDir = ./hosts/${name};
           hasDisko = builtins.pathExists (hostDir + "/disko.nix");
+          # Per-host architecture: hosts/<name>/system holds the system
+          # string (e.g. "x86_64-linux" for the CX-line telemetry box);
+          # absent means aarch64-linux, the CAX default this flake grew
+          # up with.
+          systemFile = hostDir + "/system";
+          hostSystem =
+            if builtins.pathExists systemFile
+            then nixpkgs.lib.removeSuffix "\n" (builtins.readFile systemFile)
+            else "aarch64-linux";
         in nixpkgs.lib.nixosSystem {
           system = hostSystem;
           modules =

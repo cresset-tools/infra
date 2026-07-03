@@ -1,0 +1,27 @@
+[package]
+name = "bougie-collector"
+version = "0.1.0"
+edition = "2021"
+description = "First-party telemetry + diagnose collector for bougie (TELEMETRY.md contract)."
+license = "EUPL-1.2"
+
+[dependencies]
+flate2 = "1"
+serde_json = "1"
+
+[dependencies.axum]
+version = "0.8"
+default-features = false
+features = ["http1", "json", "tokio"]
+
+[dependencies.tokio]
+version = "1"
+features = ["rt-multi-thread", "macros", "signal", "time"]
+
+[dependencies.rusqlite]
+version = "0.37"
+features = ["bundled", "backup"]
+
+[profile.release]
+lto = true
+codegen-units = 1

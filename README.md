@@ -25,6 +25,15 @@ Add a new host: `mkdir hosts/<name>` + `configuration.nix` + (optional)
 - **`origin`** — serves the bougie distribution layer
   (`index.bougie.tools` + `blobs.bougie.tools`). See
   [`hosts/origin/`](hosts/origin/) and the bootstrap section below.
+- **`telemetry`** — `telemetry.bougie.tools`, the first-party
+  bougie-collector ingest for bougie's opt-in telemetry + diagnose
+  reports (Hetzner CX23, x86 — note `hosts/telemetry/system`). The
+  contract is `TELEMETRY.md` in cresset-tools/bougie; the collector
+  source lives in-tree at
+  [`hosts/telemetry/bougie-collector/`](hosts/telemetry/bougie-collector/).
+  Privacy invariants: nginx logs are off for the vhost (no IPs on
+  disk) and the Cloudflare record must stay **DNS-only** (grey cloud)
+  — proxying would terminate TLS at a third party.
 
 ## Bootstrap a host (one-time)
 
