@@ -294,7 +294,9 @@ Isolated, globally-installed PHP CLIs. Identifier is `vendor/name[@constraint]`.
 ### Dev services — `bougie services`
 
 Shared daemons with per-project tenants, supervised by `bougied`. Catalog
-includes mariadb, redis, opensearch, rabbitmq, mailpit, mkcert, bougie-server.
+includes mariadb, redis, opensearch, rabbitmq, mailpit, server (the dev HTTP
+server — declared/added as `server`, not `bougie-server`). `mkcert` is a
+separate tool fetched by `bougie server tls install`, not a catalog entry.
 
 - `bougie services up [NAMES...] [-d|--detach]` — start declared (or named)
   services and provision this project's tenant. Attaches to the combined log
@@ -306,6 +308,12 @@ includes mariadb, redis, opensearch, rabbitmq, mailpit, mkcert, bougie-server.
 - `bougie services remove NAMES... [--purge]`
 - `bougie services list [--all]`
 - `bougie services catalog` — print the built-in catalog (no daemon).
+- `bougie services exec [--service NAME] TOOL [ARGS...]` — run a service
+  client tool (mariadb, mysqldump, redis-cli, rabbitmqctl, …) wired to this
+  project's tenant. Curated tools are also linked into `vendor/bougie/bin/`
+  at sync / `services add` time, so inside `bougie run` / recipes they
+  resolve by bare name (no daemon round-trip). Pass `--service` when the
+  tool name exists in several declared services, or isn't curated.
 - `bougie services restart [NAMES...]`
 - `bougie services status [NAME]`
 - `bougie services logs [NAME] [-f|--follow] [-n|--lines N]`
