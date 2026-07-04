@@ -97,7 +97,7 @@ Without `--start` you scaffold only, then drive the steps yourself:
 bougie new bougie-store --starter mageos
 cd bougie-store
 bougie sync                  # install PHP + extensions + vendor/
-bougie services up -d        # start declared services (mariadb, redis, opensearch, …)
+bougie service up -d         # start declared services (mariadb, redis, opensearch, …)
 bougie start                 # run the Mage-OS install/setup recipe
 bougie server                # register with the shared dev server + print the URL
 ```
@@ -127,7 +127,7 @@ bougie run --with redis=6.0 -- php artisan ...   # ad-hoc extension for this run
 bougie run --xdebug -- php script.php  # layer xdebug + XDEBUG_SESSION=1
 
 # 5. Bring up declared dev services and the dev server
-bougie services up -d                  # start declared services, detach
+bougie service up -d                   # start declared services, detach
 bougie server -d                       # register with shared dev server, print URL
 
 # 6. Recipe automation (Flex/Magento-style task DAG)
@@ -291,33 +291,34 @@ Isolated, globally-installed PHP CLIs. Identifier is `vendor/name[@constraint]`.
   `bgx phpstan/phpstan analyse src`).
 - `upgrade [PACKAGE] [--all] [--reinstall]`
 
-### Dev services — `bougie services`
+### Dev services — `bougie service`
 
-Shared daemons with per-project tenants, supervised by `bougied`. Catalog
+Shared daemons with per-project tenants, supervised by `bougied`. (Renamed
+from `bougie services`, which still works as a hidden alias.) Catalog
 includes mariadb, redis, opensearch, rabbitmq, mailpit, server (the dev HTTP
 server — declared/added as `server`, not `bougie-server`). `mkcert` is a
 separate tool fetched by `bougie server tls install`, not a catalog entry.
 
-- `bougie services up [NAMES...] [-d|--detach]` — start declared (or named)
+- `bougie service up [NAMES...] [-d|--detach]` — start declared (or named)
   services and provision this project's tenant. Attaches to the combined log
   unless detached (non-TTY / json always detaches).
-- `bougie services down [NAMES...] [--purge]` — stop this project's services;
+- `bougie service down [NAMES...] [--purge]` — stop this project's services;
   global process stays up while other tenants remain. `--purge` destroys
   tenant data.
-- `bougie services add NAMES...` (each optionally `@version`)
-- `bougie services remove NAMES... [--purge]`
-- `bougie services list [--all]`
-- `bougie services catalog` — print the built-in catalog (no daemon).
-- `bougie services exec [--service NAME] TOOL [ARGS...]` — run a service
+- `bougie service add NAMES...` (each optionally `@version`)
+- `bougie service remove NAMES... [--purge]`
+- `bougie service list [--all]`
+- `bougie service catalog` — print the built-in catalog (no daemon).
+- `bougie service exec [--service NAME] TOOL [ARGS...]` — run a service
   client tool (mariadb, mysqldump, redis-cli, rabbitmqctl, …) wired to this
   project's tenant. Curated tools are also linked into `vendor/bougie/bin/`
-  at sync / `services add` time, so inside `bougie run` / recipes they
+  at sync / `service add` time, so inside `bougie run` / recipes they
   resolve by bare name (no daemon round-trip). Pass `--service` when the
   tool name exists in several declared services, or isn't curated.
-- `bougie services restart [NAMES...]`
-- `bougie services status [NAME]`
-- `bougie services logs [NAME] [-f|--follow] [-n|--lines N]`
-- `bougie services daemon {status,stop,version}` — inspect/control `bougied`.
+- `bougie service restart [NAMES...]`
+- `bougie service status [NAME]`
+- `bougie service logs [NAME] [-f|--follow] [-n|--lines N]`
+- `bougie service daemon {status,stop,version}` — inspect/control `bougied`.
 
 ### Cross-project tenants — `bougie projects`
 
@@ -338,7 +339,7 @@ print its `<name>.bougie.run` URL, and stream its log (Ctrl-C detaches).
   (what `bougied` spawns; CI / power users).
 - `bougie server status [--config PATH]` (alias `list`) — hosts + live pool.
 - `bougie server open [NAME]`
-- `bougie server stop` — stop the shared server (== `bougie services down server`).
+- `bougie server stop` — stop the shared server (== `bougie service down server`).
 - `bougie server logs [-f] [-n N]`
 - `bougie server tls {install,uninstall}` — local CA via mkcert.
 - `bougie server hosts apply [--config PATH]` — rewrite the `/etc/hosts` block
