@@ -149,7 +149,8 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
         );
         CREATE TABLE IF NOT EXISTS daily_summary (
             day TEXT PRIMARY KEY, events INT NOT NULL, installs INT NOT NULL,
-            crashes INT NOT NULL
+            crashes INT NOT NULL, ci_events INT, ci_installs INT,
+            interactive_installs INT, ci_crashes INT
         );
         CREATE TABLE IF NOT EXISTS daily_dim (
             day TEXT NOT NULL, dim TEXT NOT NULL, key TEXT NOT NULL,
@@ -160,6 +161,14 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
     // column exists; that failure is the idempotence mechanism.
     for column in ["autoload_ms INT", "download_bytes INT", "cache_hit_pct INT"] {
         let _ = db.execute(&format!("ALTER TABLE command_events ADD COLUMN {column}"), []);
+    }
+    // Schema v3 migration (2026-07: CI split in the daily rollup).
+    // Nullable on purpose: days whose raw rows were pruned before this
+    // migration keep NULL, which /data.json maps to "unknown split".
+    for column in
+        ["ci_events INT", "ci_installs INT", "interactive_installs INT", "ci_crashes INT"]
+    {
+        let _ = db.execute(&format!("ALTER TABLE daily_summary ADD COLUMN {column}"), []);
     }
     Ok(db)
 }
@@ -198,9 +207,36 @@ fn rollup_day(db: &Connection, day: &str) -> rusqlite::Result<()> {
     if events == 0 && crashes == 0 {
         return Ok(());
     }
+    // CI split: ephemeral runners mint a fresh install_id per run, so
+    // the interactive distinct count is computed directly rather than
+    // derived by subtraction.
+    let ci_events =
+        count("SELECT count(*) FROM command_events WHERE received_day = ?1 AND ci = 1")?;
+    let ci_installs = count(
+        "SELECT count(DISTINCT install_id) FROM command_events
+         WHERE received_day = ?1 AND ci = 1",
+    )?;
+    let interactive_installs = count(
+        "SELECT count(DISTINCT install_id) FROM command_events
+         WHERE received_day = ?1 AND ci = 0",
+    )?;
+    let ci_crashes =
+        count("SELECT count(*) FROM crash_events WHERE received_day = ?1 AND ci = 1")?;
     db.execute(
-        "INSERT OR REPLACE INTO daily_summary VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![day, events, installs, crashes],
+        "INSERT OR REPLACE INTO daily_summary
+         (day, events, installs, crashes, ci_events, ci_installs,
+          interactive_installs, ci_crashes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            day,
+            events,
+            installs,
+            crashes,
+            ci_events,
+            ci_installs,
+            interactive_installs,
+            ci_crashes
+        ],
     )?;
     db.execute("DELETE FROM daily_dim WHERE day = ?1", [day])?;
 
@@ -209,6 +245,7 @@ fn rollup_day(db: &Connection, day: &str) -> rusqlite::Result<()> {
         ("outcome", "SELECT outcome, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
         ("version", "SELECT version, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
         ("platform", "SELECT os || '/' || arch || '/' || libc, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
+        ("ci", "SELECT CASE WHEN ci = 1 THEN 'ci' ELSE 'interactive' END, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
         ("php", "SELECT php_version, count(*) FROM command_events WHERE received_day = ?1 AND php_version IS NOT NULL GROUP BY 1"),
         ("crash", "SELECT fingerprint || ' ' || command, count(*) FROM crash_events WHERE received_day = ?1 GROUP BY 1"),
     ];
@@ -533,9 +570,14 @@ async fn data(State(app): State<Arc<App>>) -> impl axum::response::IntoResponse 
     let _ = rollup_day(&db, &today());
 
     let mut days: Vec<serde_json::Value> = Vec::new();
+    // Pre-migration frozen days have NULL split columns: treat them as
+    // "no CI traffic" (true in practice — the split predates any CI
+    // integration shipping) so the dashboard math stays total-safe.
     if let Ok(mut stmt) = db.prepare(
-        "SELECT day, events, installs, crashes FROM
-         (SELECT * FROM daily_summary ORDER BY day DESC LIMIT 90)
+        "SELECT day, events, installs, crashes,
+                COALESCE(ci_events, 0), COALESCE(ci_installs, 0),
+                COALESCE(interactive_installs, installs), COALESCE(ci_crashes, 0)
+         FROM (SELECT * FROM daily_summary ORDER BY day DESC LIMIT 90)
          ORDER BY day ASC",
     ) {
         if let Ok(rows) = stmt.query_map([], |r| {
@@ -544,6 +586,10 @@ async fn data(State(app): State<Arc<App>>) -> impl axum::response::IntoResponse 
                 "events": r.get::<_, i64>(1)?,
                 "installs": r.get::<_, i64>(2)?,
                 "crashes": r.get::<_, i64>(3)?,
+                "ci_events": r.get::<_, i64>(4)?,
+                "ci_installs": r.get::<_, i64>(5)?,
+                "interactive_installs": r.get::<_, i64>(6)?,
+                "ci_crashes": r.get::<_, i64>(7)?,
             }))
         }) {
             days.extend(rows.flatten());
@@ -900,6 +946,43 @@ mod tests {
             })
             .unwrap();
         assert_eq!(still, 2);
+    }
+
+    #[test]
+    fn rollup_splits_ci_from_interactive() {
+        let app = mem_app();
+        let db = app.db.lock().unwrap();
+        let mut dev = valid_command();
+        dev["install_id"] = serde_json::json!("11111111-1111-4111-8111-111111111111");
+        let mut runner = valid_command();
+        runner["ci"] = serde_json::json!(true);
+        runner["install_id"] = serde_json::json!("22222222-2222-4222-8222-222222222222");
+        assert!(insert_event(&db, "2026-07-04", &dev).is_some());
+        assert!(insert_event(&db, "2026-07-04", &runner).is_some());
+        // Same CI install id twice: events count, distinct installs don't.
+        assert!(insert_event(&db, "2026-07-04", &runner).is_some());
+        rollup_day(&db, "2026-07-04").unwrap();
+
+        let row: (i64, i64, i64, i64, i64) = db
+            .query_row(
+                "SELECT events, installs, ci_events, ci_installs, interactive_installs
+                 FROM daily_summary WHERE day='2026-07-04'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (3, 2, 2, 1, 1));
+
+        let dim = |key: &str| -> i64 {
+            db.query_row(
+                "SELECT count FROM daily_dim WHERE day='2026-07-04' AND dim='ci' AND key=?1",
+                [key],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(dim("ci"), 2);
+        assert_eq!(dim("interactive"), 1);
     }
 
     #[test]
