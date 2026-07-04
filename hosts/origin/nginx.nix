@@ -279,6 +279,16 @@
         '';
       };
 
+      # Public telemetry policy + dashboard. The consent prompts and
+      # TELEMETRY.md print bougie.tools/telemetry; the dashboard itself
+      # is served by the telemetry host (hosts/telemetry/), which owns
+      # the aggregate data.
+      locations."= /telemetry" = {
+        extraConfig = ''
+          return 301 https://telemetry.bougie.tools/;
+        '';
+      };
+
       # Static homepage. One self-contained file, so a short revalidating
       # cache keeps edits visible without bypassing the CDN. Unknown
       # paths 404 against the site root rather than redirecting.

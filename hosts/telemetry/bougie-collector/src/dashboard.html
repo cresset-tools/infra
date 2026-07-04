@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bougie telemetry — public dashboard</title>
+<style>
+  :root {
+    --page:      #f9f9f7;
+    --surface:   #fcfcfb;
+    --ink:       #0b0b0b;
+    --ink-2:     #52514e;
+    --muted:     #898781;
+    --grid:      #e1e0d9;
+    --baseline:  #c3c2b7;
+    --border:    rgba(11,11,11,0.10);
+    --series:    #2a78d6;   /* categorical slot 1 (blue), light step */
+    --series-dim:#9ec5f4;   /* sequential 200: bar track / de-emphasis */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page:      #0d0d0d;
+      --surface:   #1a1a19;
+      --ink:       #ffffff;
+      --ink-2:     #c3c2b7;
+      --muted:     #898781;
+      --grid:      #2c2c2a;
+      --baseline:  #383835;
+      --border:    rgba(255,255,255,0.10);
+      --series:    #3987e5;  /* blue, dark step */
+      --series-dim:#184f95;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  header h1 { font-size: 22px; font-weight: 650; }
+  header p  { color: var(--ink-2); max-width: 64ch; margin-top: 6px; }
+  header a  { color: inherit; }
+  .stamp { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  .tiles {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    margin: 24px 0 12px;
+  }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .tile .label { color: var(--ink-2); font-size: 13px; }
+  .tile .value { font-size: 30px; font-weight: 600; margin-top: 2px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; margin-top: 12px;
+  }
+  .card h2 { font-size: 14px; font-weight: 600; }
+  .card .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
+
+  /* daily column chart */
+  .chart { position: relative; height: 180px; }
+  .gridline {
+    position: absolute; left: 0; right: 0; height: 1px;
+    background: var(--grid);
+  }
+  .gridline .tick {
+    position: absolute; right: 100%; margin-right: 6px; top: -0.7em;
+    color: var(--muted); font-size: 11.5px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .plot {
+    position: absolute; inset: 0 0 0 34px;
+    display: flex; align-items: flex-end; gap: 2px; /* 2px surface gap */
+    border-bottom: 1px solid var(--baseline);
+  }
+  .col {
+    flex: 1 1 0; max-width: 24px; min-width: 2px;
+    background: var(--series);
+    border-radius: 4px 4px 0 0;  /* rounded data end, square baseline */
+    position: relative;
+  }
+  .col:hover { filter: brightness(1.12); }
+  .colband { flex: 1 1 0; max-width: 24px; align-self: stretch;
+    display: flex; align-items: flex-end; }
+  .colband .col { width: 100%; max-width: none; }
+  .xlab {
+    display: flex; justify-content: space-between; margin-left: 34px;
+    color: var(--muted); font-size: 11.5px; margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  #tip {
+    position: fixed; pointer-events: none; z-index: 10; display: none;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 10px; font-size: 12.5px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+    font-variant-numeric: tabular-nums;
+  }
+  #tip .d { color: var(--ink-2); }
+
+  /* horizontal bar lists (each list doubles as its table view) */
+  .grid2 { display: grid; gap: 12px; grid-template-columns: 1fr; }
+  @media (min-width: 760px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+  .rows { display: grid; gap: 7px; }
+  .row {
+    display: grid; grid-template-columns: minmax(90px, 34%) 1fr auto;
+    align-items: center; gap: 10px; font-size: 13.5px;
+  }
+  .row .k { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .row .track { height: 10px; border-radius: 4px; position: relative; }
+  .row .bar {
+    height: 10px; background: var(--series);
+    border-radius: 0 4px 4px 0;  /* data end rounded, baseline square */
+    min-width: 2px;
+  }
+  .row .v { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); font-size: 13px; }
+
+  footer { color: var(--muted); font-size: 13px; margin-top: 28px; }
+  footer a { color: inherit; }
+  code { font-size: 0.92em; }
+</style>
+</head>
+<body data-palette="#2a78d6">
+<div class="wrap">
+  <header>
+    <h1>bougie telemetry</h1>
+    <p>
+      The public dashboard for bougie's <strong>opt-in</strong>, anonymous
+      usage telemetry. Everything below is aggregate counts over
+      closed-vocabulary fields — no identifiers, no project or package
+      names, no IP addresses (they are never stored). The complete
+      contract for what may appear here is
+      <a href="https://github.com/cresset-tools/bougie/blob/main/TELEMETRY.md">TELEMETRY.md</a>.
+    </p>
+    <div class="stamp" id="stamp">loading…</div>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <h2>Events per day</h2>
+    <div class="sub">command events received, last 90 days (UTC)</div>
+    <div class="chart" id="chart"></div>
+    <div class="xlab" id="xlab"></div>
+  </div>
+
+  <div class="grid2" id="lists"></div>
+
+  <footer>
+    Turn it off any time: <code>bougie telemetry off</code> · honor
+    guaranteed for <code>DO_NOT_TRACK</code> · inspect your own queue with
+    <code>bougie telemetry log</code> · data:
+    <a href="/data.json">/data.json</a>
+  </footer>
+</div>
+<div id="tip"></div>
+
+<script>
+(async () => {
+  const fmt = n => n.toLocaleString("en-US");
+  const compact = n => n >= 10000 ? (n/1000).toFixed(1).replace(/\.0$/,"") + "K" : fmt(n);
+  let data;
+  try {
+    data = await (await fetch("/data.json")).json();
+  } catch {
+    document.getElementById("stamp").textContent = "data unavailable";
+    return;
+  }
+  const days = data.days || [];
+  const dims = data.dims || {};
+  document.getElementById("stamp").textContent =
+    "aggregated daily · generated " + (data.generated_day || "");
+
+  // ---- stat tiles ----
+  const last7 = days.slice(-7);
+  const sum = (a, k) => a.reduce((s, d) => s + (d[k] || 0), 0);
+  const outcomes = dims.outcome || [];
+  const totalOutcomes = outcomes.reduce((s, [, n]) => s + n, 0);
+  const okCount = (outcomes.find(([k]) => k === "ok") || [0, 0])[1];
+  const errShare = totalOutcomes ? (100 * (totalOutcomes - okCount) / totalOutcomes) : 0;
+  const tiles = [
+    ["Events, last 7 days", compact(sum(last7, "events"))],
+    ["Installs, latest day", compact(days.length ? days[days.length-1].installs : 0)],
+    ["Crashes, last 7 days", compact(sum(last7, "crashes"))],
+    ["Non-ok outcomes, all time", errShare.toFixed(1) + "%"],
+  ];
+  document.getElementById("tiles").innerHTML = tiles.map(([l, v]) =>
+    `<div class="tile"><div class="label">${l}</div><div class="value">${v}</div></div>`
+  ).join("");
+
+  // ---- daily column chart ----
+  const chart = document.getElementById("chart");
+  const max = Math.max(1, ...days.map(d => d.events));
+  // axis max = max rounded up to a clean 1/2/5 × 10^k; columns scale
+  // to it so the gridlines sit at exactly 100% and 50%.
+  const pow = Math.pow(10, Math.floor(Math.log10(max)));
+  const top = [1, 2, 5, 10].map(m => m * pow).find(v => v >= max);
+  for (const frac of [1, 0.5]) {
+    const g = document.createElement("div");
+    g.className = "gridline";
+    g.style.bottom = (frac * 100) + "%";
+    g.innerHTML = `<span class="tick">${compact(top * frac)}</span>`;
+    chart.appendChild(g);
+  }
+  const plot = document.createElement("div");
+  plot.className = "plot";
+  const tip = document.getElementById("tip");
+  for (const d of days) {
+    const band = document.createElement("div");
+    band.className = "colband";
+    const col = document.createElement("div");
+    col.className = "col";
+    col.style.height = Math.max(2, 100 * d.events / top) + "%";
+    band.appendChild(col);
+    band.addEventListener("mousemove", e => {
+      tip.style.display = "block";
+      tip.style.left = Math.min(e.clientX + 12, innerWidth - 160) + "px";
+      tip.style.top = (e.clientY + 12) + "px";
+      tip.innerHTML = `<span class="d">${d.day}</span><br>` +
+        `${fmt(d.events)} events · ${fmt(d.installs)} installs` +
+        (d.crashes ? ` · ${fmt(d.crashes)} crashes` : "");
+    });
+    band.addEventListener("mouseleave", () => tip.style.display = "none");
+    plot.appendChild(band);
+  }
+  chart.appendChild(plot);
+  if (days.length) {
+    document.getElementById("xlab").innerHTML =
+      `<span>${days[0].day}</span><span>${days[days.length-1].day}</span>`;
+  }
+
+  // ---- bar lists ----
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const lists = [
+    ["command",   "Commands", "all-time event counts by verb"],
+    ["outcome",   "Outcomes", "ok vs error categories, all time"],
+    ["version",   "bougie versions", "events by client version"],
+    ["platform",  "Platforms", "os / arch / libc"],
+    ["php",       "PHP versions", "minor versions only, by design"],
+    ["extension", "Extensions", "fixed vocabulary; private extensions never appear"],
+    ["service",   "Services", "declared dev services"],
+    ["crash",     "Crash signatures", "fingerprint + command, grouped"],
+  ];
+  document.getElementById("lists").innerHTML = lists.map(([dim, title, sub]) => {
+    const rows = (dims[dim] || []).slice(0, 12);
+    const rmax = Math.max(1, ...rows.map(([, n]) => n));
+    const body = rows.length ? rows.map(([k, n]) =>
+      `<div class="row"><span class="k" title="${esc(k)}">${esc(k)}</span>` +
+      `<span class="track"><span class="bar" style="width:${Math.max(2, 100*n/rmax)}%"></span></span>` +
+      `<span class="v">${fmt(n)}</span></div>`
+    ).join("") : `<div class="empty">nothing yet</div>`;
+    return `<div class="card"><h2>${title}</h2><div class="sub">${sub}</div>` +
+           `<div class="rows">${body}</div></div>`;
+  }).join("");
+})();
+</script>
+</body>
+</html>

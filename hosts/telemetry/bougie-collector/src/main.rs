@@ -113,6 +113,8 @@ fn main() {
 async fn serve(app: Arc<App>, listen: SocketAddr) {
     let router = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
+        .route("/", get(dashboard))
+        .route("/data.json", get(data))
         .route("/v1/batch", post(batch))
         .route("/v1/diagnose", post(diagnose))
         .layer(DefaultBodyLimit::max(MAX_BODY))
@@ -162,9 +164,102 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_crash_day ON crash_events(received_day);
         CREATE TABLE IF NOT EXISTS diagnose_reports (
             id TEXT PRIMARY KEY, received_at INT NOT NULL, body TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS daily_summary (
+            day TEXT PRIMARY KEY, events INT NOT NULL, installs INT NOT NULL,
+            crashes INT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS daily_dim (
+            day TEXT NOT NULL, dim TEXT NOT NULL, key TEXT NOT NULL,
+            count INT NOT NULL, PRIMARY KEY (day, dim, key)
         );",
     )?;
     Ok(db)
+}
+
+// ---- rollups (phase 6) ----
+//
+// Aggregates survive the 400-day raw retention: days whose raw rows
+// were pruned keep their frozen rollup rows, so the public dashboard's
+// history is indefinite while raw events stay bounded. Only days that
+// still have raw data are ever recomputed.
+
+fn rollup_all(db: &Connection) {
+    let mut days: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = db.prepare(
+        "SELECT DISTINCT received_day FROM command_events
+         UNION SELECT DISTINCT received_day FROM crash_events",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            days.extend(rows.flatten());
+        }
+    }
+    for day in days {
+        let _ = rollup_day(db, &day);
+    }
+}
+
+fn rollup_day(db: &Connection, day: &str) -> rusqlite::Result<()> {
+    let count = |sql: &str| -> rusqlite::Result<i64> {
+        db.query_row(sql, [day], |r| r.get(0))
+    };
+    let events = count("SELECT count(*) FROM command_events WHERE received_day = ?1")?;
+    let installs = count(
+        "SELECT count(DISTINCT install_id) FROM command_events WHERE received_day = ?1",
+    )?;
+    let crashes = count("SELECT count(*) FROM crash_events WHERE received_day = ?1")?;
+    if events == 0 && crashes == 0 {
+        return Ok(());
+    }
+    db.execute(
+        "INSERT OR REPLACE INTO daily_summary VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![day, events, installs, crashes],
+    )?;
+    db.execute("DELETE FROM daily_dim WHERE day = ?1", [day])?;
+
+    let grouped: &[(&str, &str)] = &[
+        ("command", "SELECT name, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
+        ("outcome", "SELECT outcome, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
+        ("version", "SELECT version, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
+        ("platform", "SELECT os || '/' || arch || '/' || libc, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
+        ("php", "SELECT php_version, count(*) FROM command_events WHERE received_day = ?1 AND php_version IS NOT NULL GROUP BY 1"),
+        ("crash", "SELECT fingerprint || ' ' || command, count(*) FROM crash_events WHERE received_day = ?1 GROUP BY 1"),
+    ];
+    for (dim, sql) in grouped {
+        let mut stmt = db.prepare(sql)?;
+        let rows: Vec<(String, i64)> = stmt
+            .query_map([day], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .flatten()
+            .collect();
+        for (key, n) in rows {
+            db.execute(
+                "INSERT OR REPLACE INTO daily_dim VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![day, dim, key, n],
+            )?;
+        }
+    }
+    // Comma-joined vocab lists flatten into per-name counts.
+    for (dim, column) in [("extension", "extensions"), ("service", "services")] {
+        let mut stmt = db.prepare(&format!(
+            "SELECT {column} FROM command_events
+             WHERE received_day = ?1 AND {column} IS NOT NULL AND {column} != ''"
+        ))?;
+        let lists: Vec<String> =
+            stmt.query_map([day], |r| r.get::<_, String>(0))?.flatten().collect();
+        let mut counts: HashMap<&str, i64> = HashMap::new();
+        for list in &lists {
+            for name in list.split(',') {
+                *counts.entry(name).or_default() += 1;
+            }
+        }
+        for (key, n) in counts {
+            db.execute(
+                "INSERT OR REPLACE INTO daily_dim VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![day, dim, key, n],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 // ---- rate limiting (in-memory only; the IP is never persisted) ----
@@ -420,10 +515,89 @@ async fn diagnose(
     }
 }
 
+// ---- public dashboard (phase 6): aggregates only, nothing raw ----
+
+async fn dashboard() -> impl axum::response::IntoResponse {
+    (
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            ("cache-control", "public, max-age=600"),
+        ],
+        include_str!("dashboard.html"),
+    )
+}
+
+/// Aggregate export the dashboard renders. Contains only rollup data:
+/// daily totals and closed-vocabulary distributions — never ids, never
+/// raw events, never anything from diagnose reports.
+async fn data(State(app): State<Arc<App>>) -> impl axum::response::IntoResponse {
+    let db = app.db.lock().unwrap();
+    // Keep "today" fresh: the daily loop only touches it once a day.
+    let _ = rollup_day(&db, &today());
+
+    let mut days: Vec<serde_json::Value> = Vec::new();
+    if let Ok(mut stmt) = db.prepare(
+        "SELECT day, events, installs, crashes FROM
+         (SELECT * FROM daily_summary ORDER BY day DESC LIMIT 90)
+         ORDER BY day ASC",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok(serde_json::json!({
+                "day": r.get::<_, String>(0)?,
+                "events": r.get::<_, i64>(1)?,
+                "installs": r.get::<_, i64>(2)?,
+                "crashes": r.get::<_, i64>(3)?,
+            }))
+        }) {
+            days.extend(rows.flatten());
+        }
+    }
+
+    let mut dims: HashMap<String, Vec<(String, i64)>> = HashMap::new();
+    if let Ok(mut stmt) = db.prepare(
+        "SELECT dim, key, SUM(count) FROM daily_dim
+         GROUP BY dim, key ORDER BY 3 DESC",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        }) {
+            for (dim, key, n) in rows.flatten() {
+                let entry = dims.entry(dim).or_default();
+                if entry.len() < 40 {
+                    entry.push((key, n));
+                }
+            }
+        }
+    }
+    let dims: serde_json::Map<String, serde_json::Value> = dims
+        .into_iter()
+        .map(|(dim, rows)| {
+            (
+                dim,
+                serde_json::Value::Array(
+                    rows.into_iter()
+                        .map(|(k, n)| serde_json::json!([k, n]))
+                        .collect(),
+                ),
+            )
+        })
+        .collect();
+
+    (
+        [("cache-control", "public, max-age=600")],
+        axum::Json(serde_json::json!({
+            "generated_day": today(),
+            "days": days,
+            "dims": dims,
+        })),
+    )
+}
+
 // ---- maintenance ----
 
 fn maintain(app: &App) {
     let db = app.db.lock().unwrap();
+    rollup_all(&db);
     let _ = db.execute(
         "DELETE FROM command_events WHERE received_day < date('now', ?1)",
         [format!("-{RAW_RETENTION_DAYS} days")],
@@ -663,6 +837,58 @@ mod tests {
             .query_row("SELECT message FROM crash_events LIMIT 1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(msg, None);
+    }
+
+    #[test]
+    fn rollup_aggregates_and_survives_raw_pruning() {
+        let app = mem_app();
+        let db = app.db.lock().unwrap();
+        let mut a = valid_command();
+        a["install_id"] = serde_json::json!("11111111-1111-4111-8111-111111111111");
+        let mut b = valid_command();
+        b["name"] = serde_json::json!("cache");
+        b["install_id"] = serde_json::json!("22222222-2222-4222-8222-222222222222");
+        assert!(insert_event(&db, "2026-07-03", &a).is_some());
+        assert!(insert_event(&db, "2026-07-03", &b).is_some());
+        rollup_day(&db, "2026-07-03").unwrap();
+
+        let (events, installs): (i64, i64) = db
+            .query_row(
+                "SELECT events, installs FROM daily_summary WHERE day='2026-07-03'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((events, installs), (2, 2));
+        let sync_n: i64 = db
+            .query_row(
+                "SELECT count FROM daily_dim WHERE day='2026-07-03' AND dim='command' AND key='sync'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sync_n, 1);
+        // extensions CSV flattens into per-name counts (both events
+        // carried gd + redis).
+        let gd: i64 = db
+            .query_row(
+                "SELECT count FROM daily_dim WHERE dim='extension' AND key='gd'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(gd, 2);
+
+        // Rollups are frozen once raw is gone: prune raw, re-rollup,
+        // rows survive (rollup_day no-ops on empty days).
+        db.execute("DELETE FROM command_events", []).unwrap();
+        rollup_day(&db, "2026-07-03").unwrap();
+        let still: i64 = db
+            .query_row("SELECT events FROM daily_summary WHERE day='2026-07-03'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(still, 2);
     }
 
     #[test]
