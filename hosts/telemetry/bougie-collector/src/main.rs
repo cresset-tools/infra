@@ -70,8 +70,9 @@ const ENVELOPE_KEYS: &[&str] = &[
 ];
 const COMMAND_KEYS: &[&str] = &[
     "name", "duration_ms", "outcome", "exit_code", "resolve_ms", "vendor_ms",
-    "packages_installed", "php_version", "php_flavor", "php_source", "extensions",
-    "services", "direct_deps", "total_deps",
+    "autoload_ms", "download_bytes", "cache_hit_pct", "packages_installed",
+    "php_version", "php_flavor", "php_source", "extensions", "services",
+    "direct_deps", "total_deps",
 ];
 const CRASH_KEYS: &[&str] = &["command", "fingerprint", "frames", "message"];
 
@@ -152,7 +153,8 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
             install_method TEXT, name TEXT, duration_ms INT, outcome TEXT,
             exit_code INT, resolve_ms INT, vendor_ms INT, packages_installed INT,
             php_version TEXT, php_flavor TEXT, php_source TEXT, extensions TEXT,
-            services TEXT, direct_deps TEXT, total_deps TEXT
+            services TEXT, direct_deps TEXT, total_deps TEXT, autoload_ms INT,
+            download_bytes INT, cache_hit_pct INT
         );
         CREATE INDEX IF NOT EXISTS idx_cmd_day ON command_events(received_day);
         CREATE TABLE IF NOT EXISTS crash_events (
@@ -174,6 +176,11 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
             count INT NOT NULL, PRIMARY KEY (day, dim, key)
         );",
     )?;
+    // Schema v2 migration (2026-07: perf fields). ALTER fails once the
+    // column exists; that failure is the idempotence mechanism.
+    for column in ["autoload_ms INT", "download_bytes INT", "cache_hit_pct INT"] {
+        let _ = db.execute(&format!("ALTER TABLE command_events ADD COLUMN {column}"), []);
+    }
     Ok(db)
 }
 
@@ -383,6 +390,15 @@ fn insert_event(db: &Connection, day: &str, v: &serde_json::Value) -> Option<()>
         };
         let resolve_ms = opt_u64("resolve_ms")?;
         let vendor_ms = opt_u64("vendor_ms")?;
+        let autoload_ms = opt_u64("autoload_ms")?;
+        let download_bytes = opt_u64("download_bytes")?;
+        let cache_hit_pct = opt_u64("cache_hit_pct")?.filter(|p| *p <= 100);
+        // A >100 percentage is a noncompliant client: drop the field,
+        // keep the event.
+        let cache_hit_pct = match obj.get("cache_hit_pct") {
+            Some(_) if cache_hit_pct.is_none() => None,
+            _ => cache_hit_pct,
+        };
         let packages_installed = opt_u64("packages_installed")?;
         let opt_vocab = |k: &str, vocab: &[&str]| -> Option<Option<String>> {
             match obj.get(k) {
@@ -429,12 +445,13 @@ fn insert_event(db: &Connection, day: &str, v: &serde_json::Value) -> Option<()>
 
         db.execute(
             "INSERT INTO command_events VALUES
-             (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
+             (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28)",
             rusqlite::params![
                 day, ts, install_id, invocation, version, build_sha, os, arch, libc,
                 ci, method, name, duration, outcome, exit_code, resolve_ms, vendor_ms,
                 packages_installed, php_version, php_flavor, php_source, extensions,
-                services, direct_deps, total_deps
+                services, direct_deps, total_deps, autoload_ms, download_bytes,
+                cache_hit_pct
             ],
         )
         .ok()?;
@@ -751,6 +768,7 @@ mod tests {
             "os": "linux", "arch": "x86_64", "libc": "gnu", "ci": false,
             "install_method": "installer",
             "name": "sync", "duration_ms": 1234, "outcome": "ok", "exit_code": 0,
+            "autoload_ms": 12, "download_bytes": 1048576, "cache_hit_pct": 88,
             "php_version": "8.4", "extensions": ["gd", "redis"],
             "total_deps": "16-40"
         })
@@ -792,6 +810,19 @@ mod tests {
             v[key] = val;
             assert!(insert_event(&db, "2026-07-03", &v).is_none(), "{key}");
         }
+    }
+
+    #[test]
+    fn out_of_range_cache_hit_pct_drops_field_not_event() {
+        let app = mem_app();
+        let db = app.db.lock().unwrap();
+        let mut v = valid_command();
+        v["cache_hit_pct"] = serde_json::json!(150);
+        assert!(insert_event(&db, "2026-07-04", &v).is_some());
+        let stored: Option<i64> = db
+            .query_row("SELECT cache_hit_pct FROM command_events LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, None);
     }
 
     #[test]
