@@ -25,3 +25,9 @@ features = ["bundled", "backup"]
 [profile.release]
 lto = true
 codegen-units = 1
+
+# The growable allowlist vocabularies, shared verbatim with the bougie
+# client. Bumping this version is how new commands/extensions/services
+# become accepted.
+[dependencies.bougie-telemetry]
+version = "0.41"

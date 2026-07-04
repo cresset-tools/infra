@@ -7,10 +7,11 @@
 //! never written anywhere (nginx in front runs with access_log off —
 //! see hosts/telemetry/configuration.nix).
 //!
-//! Vocabularies are mirrored from the `bougie-telemetry` crate
-//! (crates/bougie-telemetry in cresset-tools/bougie). TODO: once a
-//! bougie release publishes that crate to crates.io, depend on it and
-//! delete the copies below.
+//! The growable vocabularies (commands, outcomes, extensions,
+//! services) come straight from the published `bougie-telemetry`
+//! crate — one source of truth with the client; bumping that
+//! dependency is how the allowlist widens. Only the tiny fixed sets
+//! (os/arch/libc/…) live here.
 
 use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -31,38 +32,17 @@ const RAW_RETENTION_DAYS: i64 = 400;
 const DIAGNOSE_RETENTION_DAYS: i64 = 180;
 const BACKUPS_KEPT: usize = 7;
 
-// ---- vocabularies (mirror of bougie-telemetry; see module docs) ----
+// ---- vocabularies ----
 
-const COMMANDS: &[&str] = &[
-    "init", "new", "ext", "add", "remove", "lock", "tree", "outdated", "sync", "run",
-    "php", "node", "patches", "composer", "tool", "tool-exec", "cache", "self",
-    "telemetry", "__telemetry-flush", "diagnose", "server", "services", "projects",
-    "make", "format", "start", "stop", "unknown",
-];
-const OUTCOMES: &[&str] = &[
-    "ok", "network", "index-signature", "manifest-hash", "blob-hash", "resolution",
-    "unknown-target", "yanked", "lock-held", "filesystem", "self-update", "usage",
-    "panic", "other",
-];
+use bougie_telemetry::event::{COMMAND_VOCAB as COMMANDS, OUTCOME_VOCAB as OUTCOMES};
+use bougie_telemetry::probe::{EXTENSION_VOCAB as EXTENSIONS, SERVICE_VOCAB as SERVICES};
+
 const OSES: &[&str] = &["linux", "macos", "windows", "other"];
 const ARCHES: &[&str] = &["x86_64", "aarch64", "other"];
 const LIBCS: &[&str] = &["gnu", "musl", "none"];
 const INSTALL_METHODS: &[&str] = &["installer", "cargo", "docker", "unknown"];
 const BUCKETS: &[&str] = &["0", "1-5", "6-15", "16-40", "41-100", "100+"];
 const PHP_SOURCES: &[&str] = &["managed", "system"];
-const SERVICES: &[&str] =
-    &["mariadb", "redis", "opensearch", "rabbitmq", "mailpit", "mkcert", "server"];
-const EXTENSIONS: &[&str] = &[
-    "amqp", "apcu", "ast", "bcmath", "bz2", "calendar", "curl", "dba", "dom", "ds",
-    "enchant", "event", "exif", "ffi", "fileinfo", "ftp", "gd", "gettext", "gmp",
-    "gnupg", "iconv", "igbinary", "imagick", "imap", "intl", "ldap", "mbstring",
-    "memcached", "mongodb", "msgpack", "mysqli", "oci8", "opcache", "openswoole",
-    "pcntl", "pdo_mysql", "pdo_pgsql", "pdo_sqlite", "pdo_sqlsrv", "pgsql", "phar",
-    "posix", "protobuf", "pspell", "redis", "shmop", "simplexml", "snmp", "soap",
-    "sockets", "sodium", "sqlite3", "sqlsrv", "ssh2", "swoole", "sysvmsg", "sysvsem",
-    "sysvshm", "tidy", "uuid", "xdebug", "xhprof", "xml", "xmlreader", "xmlwriter",
-    "xsl", "yaml", "zip", "zstd",
-];
 
 const ENVELOPE_KEYS: &[&str] = &[
     "schema", "event", "ts", "install_id", "invocation", "bougie_version",
