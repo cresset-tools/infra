@@ -21,13 +21,17 @@
 # runs), so a mid-write borg pass can't capture a torn file.
 { config, pkgs, ... }:
 {
+  # The borg unit runs under ProtectSystem=strict; the stage dir must
+  # exist up front and be declared writable.
+  systemd.tmpfiles.rules = [ "d /var/lib/borg-stage 0700 root root -" ];
+
   services.borgbackup.jobs.collector = {
     preHook = ''
-      mkdir -p /var/lib/borg-stage
       ${pkgs.sqlite}/bin/sqlite3 /var/lib/bougie-collector/collector.db \
         ".backup /var/lib/borg-stage/collector.db"
     '';
     paths = [ "/var/lib/borg-stage" ];
+    readWritePaths = [ "/var/lib/borg-stage" ];
     repo = "ssh://u627005@u627005.your-storagebox.de:23/./bougie-collector";
     encryption = {
       mode = "repokey-blake2";
