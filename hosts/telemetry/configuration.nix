@@ -28,6 +28,10 @@ let
   };
 in
 {
+  imports = [
+    ./backup.nix
+  ];
+
   # ---- Bootloader ----
   # CX-line boots legacy BIOS; GRUB with the BIOS-boot partition from
   # disko.nix. (origin's systemd-boot is UEFI-only — don't copy it.)
