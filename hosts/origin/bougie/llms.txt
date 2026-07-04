@@ -347,9 +347,11 @@ print its `<name>.bougie.run` URL, and stream its log (Ctrl-C detaches).
 ### Format — `bougie format`
 
 - `bougie format [ARGS...]` — format the project's PHP. Downloads and caches a
-  pinned `wick` binary (Composer/Packagist package `cresset/wick` —
-  unconfigurable, Laravel Pint-style) on first use. Every argument is
-  forwarded verbatim to `wick` (`--check`,
+  pinned `wick` binary (unconfigurable, Laravel Pint-style) on first use,
+  fetched directly from `cresset-tools/wick` GitHub releases (mirror→GitHub,
+  SHA-256 verified — the same path `bougie self update` uses), **not** via
+  Composer/Packagist — `bougie` never installs the `cresset/wick` package.
+  Every argument is forwarded verbatim to `wick` (`--check`,
   `--diff`, paths, `-` for stdin). Pin a specific wick release with
   `BOUGIE_WICK_VERSION`. Cross-platform.
 
