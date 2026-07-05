@@ -37,13 +37,15 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 00f4eb0
-  # ("chore: add Plausible analytics to layout": loads the privacy-friendly
-  # Plausible script (analytics.yele.dev) from the app layout <head>, so it
-  # covers the configurator and saved-config pages). The maker is a Blade page
-  # driven by vanilla JS (resources/js/{maker-engine,build-canvas}.js) with a
-  # client-side derivation engine; the server is hit only at POST /api/build
-  # (composer.json + install tree) and POST /save. No new composer/npm deps —
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ aa672dd
+  # (PR #55: additive "inverse" build mode — start from the minimal edition
+  # and `require` what you add, instead of full edition + `replace`. Ships
+  # the service layer + CLI + API guards and the Build Canvas profile card
+  # ("Mage-OS Minimal", mode note + locked in-minimal rendering). Works on
+  # both distributions for 3.1.0 — the modulargento minimal edition is live
+  # on modulargento.cresset.tools since 2026-07-04. The daily
+  # mageos-maker-catalog refresh keeps the minimal metapackage metadata the
+  # additive UI derives from up to date.) No new composer/npm deps —
   # composer.lock / package-lock.json unchanged, so vendorHash + npmDepsHash
   # below stay put — only rev + hash move. (Bump with
   # scripts/update-mageos-maker.sh.)
