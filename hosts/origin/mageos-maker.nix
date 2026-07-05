@@ -37,7 +37,7 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ d8eba62
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ 375f87e
   # (PR #55: additive "inverse" build mode — start from the minimal edition
   # and `require` what you add, instead of full edition + `replace`. Ships
   # the service layer + CLI + API guards and the Build Canvas profile card
@@ -48,12 +48,12 @@ let
   # additive UI derives from up to date.) No new composer/npm deps —
   # composer.lock / package-lock.json unchanged, so vendorHash + npmDepsHash
   # below stay put — only rev + hash move. (Bump with
-  # scripts/update-mageos-maker.sh.) On top: d8eba62 (affecthint flows inline in profile cards).
+  # scripts/update-mageos-maker.sh.) On top: d8eba62 (inline affecthint), 375f87e (additive-aware install tree / package count).
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "d8eba62eec5291f28da94423b87ee0e13e4f164b";
-    hash = "sha256-hqBU47VOUiU4n6BeYqDO7EadeUCO2V6m/tmLOEdwBDI=";
+    rev = "375f87e5bad1fe5c612a6f1074a317ac6326248d";
+    hash = "sha256-rw7z80vSPwklQGBPkFTLqtoEx3kL8mCRjd5uJKVVK9M=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
