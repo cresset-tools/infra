@@ -52,9 +52,12 @@ raw() { curl -fsSL "https://raw.githubusercontent.com/$OWNER/$REPO/$1/$2"; }
 # Read the value of `<key> = "...";` from the nix file (first match).
 nixval() { sed -n "s/.*$1 = \"\\([^\"]*\\)\";.*/\\1/p" "$NIXFILE" | head -n1; }
 # Replace the value of `<key> = "...";` in place (first occurrence only).
+# key/value travel via env, not string-interpolation into the perl program:
+# sha256 hashes contain / and + which would break the s/// delimiters.
 setval() {
-  local key="$1" val="$2"
-  perl -0pi -e "BEGIN{\$done=0} s/(\\b$key = \")[^\"]*(\";)/\${1}$val\${2}/ unless \$done++" "$NIXFILE"
+  SETVAL_KEY="$1" SETVAL_VAL="$2" perl -0pi -e \
+    'BEGIN { $done = 0; $k = quotemeta $ENV{SETVAL_KEY}; $v = $ENV{SETVAL_VAL} }
+     s/(\b$k = ")[^"]*(";)/${1}${v}${2}/ unless $done++' "$NIXFILE"
 }
 
 [ -f "$NIXFILE" ] || { echo "not found: $NIXFILE" >&2; exit 1; }
