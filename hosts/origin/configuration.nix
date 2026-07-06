@@ -132,6 +132,7 @@
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHHigF4N4lR0UuIXB+bM7Mr52PMGurKPoe0Yjld3U/QB bougie CI publish"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPqy9AOUqeZwjB0kTtGnIwudncumdx1pT7B08g5JW7su wick CI publish"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGzWP/lZQnXRgYQkevlhCISv6YMRZ/QZpZi/+aumetpW magequery CI publish"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINcbN5uEIHhl0Ue7HV+pS3V67eq3oSt7d0znoJZ0Ocgg jibs CI publish"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDC+gfeoHgjUZEHWKhGW4UJq8z2GnfP43LBViQBP7y03 modulargento mirror"
     ];
   };
@@ -201,13 +202,18 @@
         /srv/releases/github/magequery \
         /srv/releases/github/magequery/releases \
         /srv/releases/github/magequery/releases/download \
+        /srv/releases/github/jibs \
+        /srv/releases/github/jibs/releases \
+        /srv/releases/github/jibs/releases/download \
         /srv/releases/installers \
         /srv/releases/installers/bougie \
         /srv/releases/installers/bougie/latest \
         /srv/releases/installers/wick \
         /srv/releases/installers/wick/latest \
         /srv/releases/installers/magequery \
-        /srv/releases/installers/magequery/latest
+        /srv/releases/installers/magequery/latest \
+        /srv/releases/installers/jibs \
+        /srv/releases/installers/jibs/latest
       if [ ! -e /srv/index/index.json ]; then
         cat > /srv/index/index.json <<'JSON'
       {
