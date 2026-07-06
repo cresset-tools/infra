@@ -7,9 +7,9 @@
   <title>cresset.tools - fancy PHP tooling</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <meta name="description"
-    content="cresset.tools builds fast, carefully-made developer tools for the PHP ecosystem. Home of bougie, mageos-maker and wick.">
+    content="cresset.tools builds fast, carefully-made developer tools for the PHP ecosystem. Home of bougie, mageos-maker, wick and magequery.">
   <meta property="og:title" content="cresset.tools — developer tools for PHP">
-  <meta property="og:description" content="Fast, carefully-made developer tools for the PHP ecosystem. Home of bougie, mageos-maker and wick.">
+  <meta property="og:description" content="Fast, carefully-made developer tools for the PHP ecosystem. Home of bougie, mageos-maker, wick and magequery.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://cresset.tools/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -316,6 +316,30 @@
           grabs wick and runs it for you.
         </p>
         <cmd-line><cmd-prompt>$</cmd-prompt><code>curl -LsSf https://bougie.tools/wick.sh | sh</code></cmd-line>
+      </tool-entry>
+    </tool-list>
+
+    <sec-rule></sec-rule>
+    <sec-label><span>Tools</span><layout-spacer></layout-spacer><span>02 the codebase</span></sec-label>
+
+    <tool-list>
+      <tool-entry>
+        <tool-head>
+          <tool-name>magequery<name-dot>.</name-dot></tool-name>
+          <layout-spacer></layout-spacer>
+          <a href="https://github.com/cresset-tools/magequery">github.com/cresset-tools/magequery →</a>
+        </tool-head>
+        <p>
+          Understand how any Magento 2 store is wired without booting it. DI resolution,
+          plugins, events, cron, config across every scope, the admin permission tree and
+          plenty more, each answer pointing at the exact file and line it came from.
+        </p>
+        <p>
+          <code>bin/magento</code> spends seconds booting the framework on every call.
+          magequery reads the source directly and answers in milliseconds, even on a checkout
+          that was never set up. No database, no compile, no working PHP.
+        </p>
+        <cmd-line><cmd-prompt>$</cmd-prompt><code>curl -LsSf https://bougie.tools/magequery.sh | sh</code></cmd-line>
       </tool-entry>
       <tool-soon>
         <soon-name>// more on the way</soon-name>
