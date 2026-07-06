@@ -158,9 +158,11 @@ in
         access_log off;
         error_log /dev/null crit;
 
-        # Client batches cap at 256 KiB; a little headroom, nothing
-        # more.
-        client_max_body_size 512k;
+        # Telemetry batches cap at 256 KiB; schema-2 diagnose reports
+        # (service-log tails, DIAGNOSE_PLAN.md in cresset-tools/bougie)
+        # go up to 1 MiB. The collector enforces the per-route split;
+        # nginx just needs to let the bigger one through.
+        client_max_body_size 1m;
       '';
 
       locations."/" = {
@@ -169,6 +171,28 @@ in
           proxy_set_header Host $host;
           # The collector trusts this only from loopback peers, for
           # its in-memory rate limiter.
+          proxy_set_header X-Forwarded-For $remote_addr;
+        '';
+      };
+
+      # The maintainer's diagnose-report viewer. Auth lives HERE, not
+      # in the collector: this flake auto-upgrades from a public repo,
+      # so the secret can't be committed — the htpasswd file is
+      # provisioned once by hand on the box:
+      #
+      #   install -d -m 750 -o root -g nginx /var/lib/nginx-auth
+      #   printf 'jelle:%s\n' "$(openssl passwd -apr1)" \
+      #     > /var/lib/nginx-auth/diagnose-htpasswd
+      #   chown root:nginx /var/lib/nginx-auth/diagnose-htpasswd
+      #   chmod 640 /var/lib/nginx-auth/diagnose-htpasswd
+      #
+      # Until that file exists nginx answers 403 for /admin/ — fail
+      # closed, nothing else on the vhost is affected.
+      locations."/admin/" = {
+        proxyPass = "http://127.0.0.1:8787";
+        basicAuthFile = "/var/lib/nginx-auth/diagnose-htpasswd";
+        extraConfig = ''
+          proxy_set_header Host $host;
           proxy_set_header X-Forwarded-For $remote_addr;
         '';
       };

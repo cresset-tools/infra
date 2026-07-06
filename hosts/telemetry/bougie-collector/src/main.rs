@@ -13,8 +13,9 @@
 //! dependency is how the allowlist widens. Only the tiny fixed sets
 //! (os/arch/libc/…) live here.
 
-use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as UrlPath, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use rusqlite::Connection;
@@ -26,6 +27,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_BODY: usize = 256 * 1024;
+/// Diagnose reports carry service-log tails since schema 2 (bougie's
+/// DIAGNOSE_PLAN.md); the client budgets the markdown to 384 KiB, so
+/// 1 MiB leaves comfortable JSON-escaping headroom. Route-scoped —
+/// `/v1/batch` stays at [`MAX_BODY`].
+const DIAGNOSE_MAX_BODY: usize = 1024 * 1024;
+/// Sanity cap on the `report_md` string itself inside a schema-2
+/// diagnose payload.
+const REPORT_MD_MAX: usize = 512 * 1024;
 const MAX_DECOMPRESSED: u64 = 1024 * 1024; // zip-bomb guard
 const RATE_LIMIT_PER_HOUR: u32 = 120;
 const RAW_RETENTION_DAYS: i64 = 400;
@@ -97,7 +106,17 @@ async fn serve(app: Arc<App>, listen: SocketAddr) {
         .route("/", get(dashboard))
         .route("/data.json", get(data))
         .route("/v1/batch", post(batch))
-        .route("/v1/diagnose", post(diagnose))
+        .route(
+            "/v1/diagnose",
+            post(diagnose).layer(DefaultBodyLimit::max(DIAGNOSE_MAX_BODY)),
+        )
+        // /admin/* is reachable only through nginx's basic-auth
+        // location (the collector listens on loopback); it does no
+        // auth of its own. See hosts/telemetry/configuration.nix.
+        .route("/admin/diagnose", get(admin_list))
+        .route("/admin/diagnose/{id}", get(admin_detail))
+        .route("/admin/diagnose/{id}/raw", get(admin_raw))
+        .route("/admin/diagnose/{id}/delete", post(admin_delete))
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .with_state(app.clone());
 
@@ -525,27 +544,296 @@ async fn diagnose(
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) else {
         return reject(StatusCode::BAD_REQUEST);
     };
-    // Loose shape check: diagnose payloads are user-reviewed free-form
-    // reports, not allowlisted telemetry.
-    if value.get("schema_version").and_then(|v| v.as_u64()) != Some(1) {
+    if !diagnose_shape_ok(&value) {
         return reject(StatusCode::BAD_REQUEST);
     }
     let db = app.db.lock().unwrap();
+    match diagnose_insert(&db, &value) {
+        Some(id) => (StatusCode::OK, axum::Json(serde_json::json!({ "id": id }))),
+        None => reject(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+/// Accepted diagnose shapes. Both are user-reviewed correspondence,
+/// not allowlisted telemetry, so the check stays loose:
+///  - schema 1: the legacy free-form JSON report;
+///  - schema 2: an envelope whose `report_md` string IS the report
+///    (the user-edited Markdown, byte-for-byte what they reviewed).
+fn diagnose_shape_ok(value: &serde_json::Value) -> bool {
+    match value.get("schema_version").and_then(|v| v.as_u64()) {
+        Some(1) => true,
+        Some(2) => value
+            .get("report_md")
+            .and_then(|v| v.as_str())
+            .is_some_and(|md| !md.trim().is_empty() && md.len() <= REPORT_MD_MAX),
+        _ => false,
+    }
+}
+
+fn diagnose_insert(db: &Connection, value: &serde_json::Value) -> Option<String> {
     let suffix: String = db
         .query_row("SELECT lower(hex(randomblob(4)))", [], |r| r.get(0))
         .unwrap_or_else(|_| "00000000".into());
     let id = format!("diag-{suffix}");
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let ok = db
-        .execute(
-            "INSERT INTO diagnose_reports (id, received_at, body) VALUES (?1, ?2, ?3)",
-            rusqlite::params![id, now, value.to_string()],
-        )
-        .is_ok();
-    if ok {
-        (StatusCode::OK, axum::Json(serde_json::json!({ "id": id })))
+    db.execute(
+        "INSERT INTO diagnose_reports (id, received_at, body) VALUES (?1, ?2, ?3)",
+        rusqlite::params![id, now, value.to_string()],
+    )
+    .ok()?;
+    Some(id)
+}
+
+// ---- /admin/diagnose: the maintainer's report viewer ----
+//
+// Auth belongs to nginx (a basic-auth `location /admin/` in
+// configuration.nix); the collector listens on loopback only, so
+// anything reaching these handlers came through it. Responses are
+// `no-store` — report content must never land in a shared cache.
+
+const NO_STORE: (&str, &str) = ("cache-control", "no-store");
+const HTML_UTF8: (&str, &str) = ("content-type", "text/html; charset=utf-8");
+const ADMIN_LIST_LIMIT: usize = 200;
+
+/// Shared page skeleton: self-contained, dark-mode aware, no external
+/// assets (same stance as dashboard.html).
+const ADMIN_STYLE: &str = "<!doctype html><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+<style>\
+body{font:14px/1.5 system-ui,sans-serif;margin:2rem auto;max-width:72rem;\
+padding:0 1rem;color:#1a1a2e;background:#fff}\
+a{color:#3b5bdb}\
+@media(prefers-color-scheme:dark){body{color:#e6e6f0;background:#15151f}a{color:#9bb4ff}}\
+table{border-collapse:collapse;width:100%}\
+td,th{text-align:left;padding:.35rem .6rem;border-bottom:1px solid #8884;\
+vertical-align:top}\
+pre{white-space:pre-wrap;overflow-x:auto;background:#8881;padding:1rem;\
+border-radius:6px}\
+form{display:inline}button{cursor:pointer}\
+.muted{opacity:.65}\
+</style>";
+
+struct ReportRow {
+    id: String,
+    received_at: u64,
+    body: serde_json::Value,
+}
+
+fn list_reports(db: &Connection, limit: usize) -> Vec<ReportRow> {
+    let Ok(mut stmt) = db.prepare(
+        "SELECT id, received_at, body FROM diagnose_reports
+         ORDER BY received_at DESC LIMIT ?1",
+    ) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([limit as i64], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))
+    }) else {
+        return Vec::new();
+    };
+    rows.flatten()
+        .map(|(id, received_at, body)| ReportRow {
+            id,
+            received_at: received_at.max(0) as u64,
+            body: serde_json::from_str(&body).unwrap_or(serde_json::Value::Null),
+        })
+        .collect()
+}
+
+fn load_report(db: &Connection, id: &str) -> Option<ReportRow> {
+    db.query_row(
+        "SELECT id, received_at, body FROM diagnose_reports WHERE id = ?1",
+        [id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)),
+    )
+    .ok()
+    .map(|(id, received_at, body)| ReportRow {
+        id,
+        received_at: received_at.max(0) as u64,
+        body: serde_json::from_str(&body).unwrap_or(serde_json::Value::Null),
+    })
+}
+
+fn delete_report(db: &Connection, id: &str) -> bool {
+    db.execute("DELETE FROM diagnose_reports WHERE id = ?1", [id])
+        .map(|n| n > 0)
+        .unwrap_or(false)
+}
+
+/// One-line list summary, derived at render time from the stored
+/// body — so a report whose author redacted the command line in the
+/// editor shows the redacted form here too, never a structured copy.
+fn summarize(body: &serde_json::Value) -> String {
+    let text = if let Some(md) = body.get("report_md").and_then(|v| v.as_str()) {
+        md.lines()
+            .find_map(|l| l.strip_prefix("command:"))
+            .map(|rest| rest.trim().to_owned())
+            .or_else(|| {
+                md.lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default()
     } else {
-        reject(StatusCode::INTERNAL_SERVER_ERROR)
+        // Schema 1: the structured report's failure argv.
+        body.pointer("/failure/argv")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" ")
+            })
+            .unwrap_or_default()
+    };
+    text.chars().take(120).collect()
+}
+
+/// `bougie 0.45.0 · linux/x86_64/gnu` — both schemas carry these
+/// top-level envelope facts.
+fn report_meta(body: &serde_json::Value) -> String {
+    let s = |k: &str| body.get(k).and_then(|v| v.as_str()).unwrap_or("?");
+    format!(
+        "bougie {} · {}/{}/{}",
+        s("bougie_version"),
+        s("os"),
+        s("arch"),
+        s("libc")
+    )
+}
+
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Seconds since epoch → `YYYY-MM-DD HH:MM:SS` UTC (Hinnant civil
+/// date, same math as [`today`]).
+fn utc_datetime(secs: u64) -> String {
+    let secs = secs as i64;
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let tod = secs.rem_euclid(86_400);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        if m <= 2 { y + 1 } else { y },
+        m,
+        d,
+        tod / 3600,
+        (tod % 3600) / 60,
+        tod % 60
+    )
+}
+
+fn delete_form(id: &str) -> String {
+    format!(
+        "<form method=\"post\" action=\"/admin/diagnose/{id}/delete\" \
+         onsubmit=\"return confirm('delete {id}?')\"><button>delete</button></form>"
+    )
+}
+
+async fn admin_list(State(app): State<Arc<App>>) -> Response {
+    let rows = {
+        let db = app.db.lock().unwrap();
+        list_reports(&db, ADMIN_LIST_LIMIT)
+    };
+    let mut html = format!(
+        "{ADMIN_STYLE}<title>bougie diagnose reports</title>\
+         <h1>diagnose reports</h1>\
+         <p class=\"muted\">{} shown (newest first, retention 180 days)</p>\
+         <table><tr><th>id</th><th>received (UTC)</th><th>build</th>\
+         <th>summary</th><th></th></tr>",
+        rows.len()
+    );
+    for row in &rows {
+        html.push_str(&format!(
+            "<tr><td><a href=\"/admin/diagnose/{id}\">{id}</a></td>\
+             <td>{when}</td><td>{meta}</td><td>{summary}</td><td>{del}</td></tr>",
+            id = row.id,
+            when = utc_datetime(row.received_at),
+            meta = escape_html(&report_meta(&row.body)),
+            summary = escape_html(&summarize(&row.body)),
+            del = delete_form(&row.id),
+        ));
+    }
+    html.push_str("</table>");
+    ([NO_STORE, HTML_UTF8], html).into_response()
+}
+
+async fn admin_detail(
+    State(app): State<Arc<App>>,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
+    let row = {
+        let db = app.db.lock().unwrap();
+        load_report(&db, &id)
+    };
+    let Some(row) = row else {
+        return ([NO_STORE], StatusCode::NOT_FOUND).into_response();
+    };
+    // Schema 2 renders the markdown verbatim in a <pre> — monospace is
+    // the right reading mode for log tails, and rendering markdown
+    // would only obscure exactness. Schema 1 pretty-prints the JSON.
+    let content = match row.body.get("report_md").and_then(|v| v.as_str()) {
+        Some(md) => md.to_owned(),
+        None => serde_json::to_string_pretty(&row.body).unwrap_or_default(),
+    };
+    let html = format!(
+        "{ADMIN_STYLE}<title>{id}</title>\
+         <p><a href=\"/admin/diagnose\">&larr; all reports</a></p>\
+         <h1>{id}</h1>\
+         <p class=\"muted\">received {when} UTC · {meta} · \
+         <a href=\"/admin/diagnose/{id}/raw\">raw json</a></p>\
+         <p>{del}</p>\
+         <pre>{body}</pre>",
+        id = row.id,
+        when = utc_datetime(row.received_at),
+        meta = escape_html(&report_meta(&row.body)),
+        del = delete_form(&row.id),
+        body = escape_html(&content),
+    );
+    ([NO_STORE, HTML_UTF8], html).into_response()
+}
+
+async fn admin_raw(
+    State(app): State<Arc<App>>,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
+    let row = {
+        let db = app.db.lock().unwrap();
+        load_report(&db, &id)
+    };
+    match row {
+        Some(row) => (
+            [NO_STORE, ("content-type", "application/json")],
+            row.body.to_string(),
+        )
+            .into_response(),
+        None => ([NO_STORE], StatusCode::NOT_FOUND).into_response(),
+    }
+}
+
+/// Honors TELEMETRY.md's "deleted on request by report id" without
+/// sqlite gymnastics on the box.
+async fn admin_delete(
+    State(app): State<Arc<App>>,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
+    let deleted = {
+        let db = app.db.lock().unwrap();
+        delete_report(&db, &id)
+    };
+    if deleted {
+        Redirect::to("/admin/diagnose").into_response()
+    } else {
+        ([NO_STORE], StatusCode::NOT_FOUND).into_response()
     }
 }
 
@@ -993,5 +1281,92 @@ mod tests {
         assert!(sha_ok("0123456ab") && !sha_ok("xyz"));
         assert!(frame_ok("<bougie_cli::Cli as clap::Parser>::parse"));
         assert!(!frame_ok("openssl::connect"));
+    }
+
+    // ---- diagnose ingest (schemas 1 + 2) and the admin viewer ----
+
+    fn v2_report(md: &str) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 2, "bougie_version": "0.45.0",
+            "os": "linux", "arch": "x86_64", "libc": "gnu",
+            "report_md": md
+        })
+    }
+
+    #[test]
+    fn diagnose_shapes_v1_and_v2_accepted_others_rejected() {
+        // v1: free-form JSON with the version marker.
+        assert!(diagnose_shape_ok(&serde_json::json!({
+            "schema_version": 1, "failure": {"argv": ["bougie", "start"]}
+        })));
+        // v2: the markdown IS the report.
+        assert!(diagnose_shape_ok(&v2_report("# bougie diagnostic report\n")));
+        // v2 without / with empty / with oversized report_md.
+        assert!(!diagnose_shape_ok(&serde_json::json!({ "schema_version": 2 })));
+        assert!(!diagnose_shape_ok(&v2_report("   \n")));
+        assert!(!diagnose_shape_ok(&v2_report(&"x".repeat(REPORT_MD_MAX + 1))));
+        // Unknown schema.
+        assert!(!diagnose_shape_ok(&serde_json::json!({ "schema_version": 3 })));
+        assert!(!diagnose_shape_ok(&serde_json::json!({})));
+    }
+
+    #[test]
+    fn diagnose_insert_list_detail_delete_roundtrip() {
+        let app = mem_app();
+        let db = app.db.lock().unwrap();
+        let md = "# bougie diagnostic report\n\n## last failure\n\n\
+                  command:   bougie start\ncategory:  service_start_failed (exit 74)\n";
+        let id = diagnose_insert(&db, &v2_report(md)).expect("insert");
+        assert!(id.starts_with("diag-"), "{id}");
+
+        let rows = list_reports(&db, 10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+        assert_eq!(summarize(&rows[0].body), "bougie start");
+        assert_eq!(report_meta(&rows[0].body), "bougie 0.45.0 · linux/x86_64/gnu");
+
+        let row = load_report(&db, &id).expect("detail");
+        assert_eq!(
+            row.body.get("report_md").and_then(|v| v.as_str()),
+            Some(md)
+        );
+
+        assert!(delete_report(&db, &id));
+        assert!(!delete_report(&db, &id), "second delete is a no-op");
+        assert!(load_report(&db, &id).is_none());
+    }
+
+    #[test]
+    fn summarize_falls_back_to_v1_argv() {
+        let v1 = serde_json::json!({
+            "schema_version": 1, "bougie_version": "0.43.2",
+            "os": "linux", "arch": "x86_64", "libc": "gnu",
+            "failure": {"argv": ["bougie", "sync", "--offline"]}
+        });
+        assert_eq!(summarize(&v1), "bougie sync --offline");
+        assert_eq!(report_meta(&v1), "bougie 0.43.2 · linux/x86_64/gnu");
+    }
+
+    #[test]
+    fn summaries_are_derived_from_the_markdown_only() {
+        // A report whose author redacted the command line in the
+        // editor must show the redacted form in the list too.
+        let body = v2_report("# bougie diagnostic report\n\ncommand:   «redacted»\n");
+        assert_eq!(summarize(&body), "«redacted»");
+    }
+
+    #[test]
+    fn utc_datetime_formats_epoch_seconds() {
+        assert_eq!(utc_datetime(0), "1970-01-01 00:00:00");
+        // 2026-07-06 12:00:00 UTC.
+        assert_eq!(utc_datetime(1_783_339_200), "2026-07-06 12:00:00");
+    }
+
+    #[test]
+    fn escape_html_covers_the_dangerous_four() {
+        assert_eq!(
+            escape_html(r#"<pre a="b">&x</pre>"#),
+            "&lt;pre a=&quot;b&quot;&gt;&amp;x&lt;/pre&gt;"
+        );
     }
 }
