@@ -344,6 +344,13 @@ separate tool fetched by `bougie server tls install`, not a catalog entry.
   tool name exists in several declared services, or isn't curated.
 - `bougie service restart [NAMES...]`
 - `bougie service status [NAME]`
+- `bougie service credentials [NAME] [--env]` — print this project's tenant
+  connection info — including passwords — for wiring up external clients
+  (GUI database tools, API explorers, …). Reads the on-disk tenant ledgers;
+  no daemon required. `--env` emits `KEY='value'` lines using the exact
+  `BOUGIE_SERVICE_*` names `bougie run` injects, for `eval` in a plain
+  shell; takes precedence over `--format`. Inside `bougie run` the same
+  values are already injected as `BOUGIE_SERVICE_*` env vars.
 - `bougie service logs [NAME] [-f|--follow] [-n|--lines N]`
 - `bougie service daemon {status,stop,version}` — inspect/control `bougied`.
 
