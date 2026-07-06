@@ -141,8 +141,10 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
 
 ### Project lifecycle
 
-- `bougie init [--toml] [--name VENDOR/PACKAGE] [--starter URL_OR_ALIAS] [--start]`
-  — scaffold a project in the current dir.
+- `bougie init [--script FILE] [--toml] [--name VENDOR/PACKAGE] [--starter URL_OR_ALIAS] [--start]`
+  — scaffold a project in the current dir. `--script FILE` scaffolds a
+  single-file PHP script instead (see "Single-file scripts" below); other
+  flags are ignored in that mode.
 - `bougie new DIRECTORY [--toml] [--name …] [--starter …] [--start]`
   — create DIRECTORY and scaffold inside it.
 - `bougie sync [--offline] [--dry-run] [--scripts | --no-scripts] [--patches | --no-patches] [--resolution STRATEGY] [--managed-php | --no-managed-php] [--no-php-downloads] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
@@ -152,8 +154,10 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
   applies when a fresh lock must be resolved. PHP source: `--managed-php` (only
   bougie-managed), `--no-managed-php` (only system), `--no-php-downloads` (no
   auto-download).
-- `bougie run [--with EXT=VER]... [--no-sync] [--xdebug] [--php VER|PATH] [--managed-php | --no-managed-php] [--no-php-downloads] -- ARGV...`
-  — run a command in the project env. Ad-hoc extensions via `--with`.
+- `bougie run [--script] [--with EXT=VER]... [--no-sync] [--xdebug] [--php VER|PATH] [--managed-php | --no-managed-php] [--no-php-downloads] -- ARGV...`
+  — run a command or script in the project env. Ad-hoc extensions via
+  `--with`. `--script` treats the first argument as a self-contained PHP
+  script instead (see "Single-file scripts" below).
 - `bougie start [--no-sync] [--dry-run] [--explain] [--no-builtin] [--recipe NAME]`
   — bring the whole project up: sync the toolchain + vendor, provision and start
   services, run any setup, start the dev server. Runs the detected recipe's
@@ -171,20 +175,40 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
 uv-style top-level package verbs. Use `bougie composer require/update` for
 full Composer-compatible flag parity.
 
-- `bougie add PACKAGES... [--dev] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-sync] [--frozen] [--resolution STRATEGY] [-d DIR] [--dry-run] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
+- `bougie add PACKAGES... [--script FILE] [--dev] [-w|--with-dependencies] [-W|--with-all-dependencies] [--no-sync] [--frozen] [--resolution STRATEGY] [-d DIR] [--dry-run] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
   — bare `vendor/pkg` writes a `>=X.Y` lower bound; explicit constraint uses
   `@` syntax (`vendor/pkg@^1.0`). Edits `composer.json`, re-resolves
   `composer.lock`, installs into `vendor/`. `--no-sync` stops after the lock;
-  `--frozen` edits `composer.json` only.
+  `--frozen` edits `composer.json` only. `--script FILE` adds to a self-contained
+  script's inline dependency block instead (see "Single-file scripts" below).
 - `bougie remove PACKAGES... [--dev] [--no-sync] [--frozen] [-d DIR] [--dry-run] [--ignore-platform-reqs] [--ignore-platform-req REQ]`
-- `bougie lock [--resolution STRATEGY] [-d DIR] [--dry-run] [--ignore-platform-reqs] [--ignore-platform-req REQ]` — minimal lock refresh: reconcile
+- `bougie lock [--script FILE] [--resolution STRATEGY] [-d DIR] [--dry-run] [--ignore-platform-reqs] [--ignore-platform-req REQ]` — minimal lock refresh: reconcile
   `composer.lock` with `composer.json`, holding each package at its locked
   version where still valid, re-resolving only what changed. Never bumps
-  versions, never installs. Content-hash match → offline no-op.
+  versions, never installs. Content-hash match → offline no-op. `--script FILE`
+  locks a single-file script's inline dependencies into an adjacent
+  `<file>.lock` instead.
 - `bougie tree [PACKAGE] [--no-dev] [-d DIR]` — print the dependency tree
   (reads `composer.lock`).
 - `bougie outdated [PACKAGES...] [-D|--direct] [--major-only] [--minor-only] [--patch-only] [--no-dev] [--strict] [-d DIR]`
   — list installed packages with a newer version available.
+
+### Single-file scripts (uv-style)
+
+uv's `uv init --script` / `uv add --script` / `uv run --script` model,
+applied to a single PHP file instead of a project:
+
+- `bougie init --script FILE` — scaffold FILE with a
+  `#!/usr/bin/env -S bougie run --script` shebang and an inline
+  `# /// script` composer.json block.
+- `bougie add PACKAGES... --script FILE` — add dependencies to that inline
+  block and refresh the adjacent `<file>.lock`.
+- `bougie lock --script FILE` — refresh `<file>.lock` from the inline block
+  without running it.
+- `bougie run --script FILE [ARGS...]` — resolve the script's declared
+  `php` / `ext-*` / package requires into an ephemeral cached environment and
+  run it with the autoloader prepended. Skips project sync and the
+  composer-script lookup; this is what the shebang above invokes directly.
 
 ### PHP interpreters — `bougie php`
 
@@ -284,17 +308,20 @@ Isolated, globally-installed PHP CLIs. Identifier is `vendor/name[@constraint]`.
 - `inject PACKAGE --with PKG_OR_EXT...` / `uninject PACKAGE --with PKG_OR_EXT...`
 - `list`
 - `dir [PACKAGE]` — tool's dir, or the tools root.
-- `run PACKAGE [--php VER] [--with PKG_OR_EXT]... ARGS...` — one-off run,
-  reusing a matching persistent install or materializing into the cache.
-  No `--` separator needed; everything after `PACKAGE` is forwarded verbatim.
-  **`bgx` is a top-level shortcut for `bougie tool run`** (e.g.
-  `bgx phpstan/phpstan analyse src`).
+- `run PACKAGE [--php VER] [--with PKG_OR_EXT]... [--no-project] ARGS...` —
+  one-off run, reusing a matching persistent install or materializing into
+  the cache. By default a surrounding project's PHP version and required
+  extensions are applied to the run (tool requirements win on conflict);
+  `--no-project` ignores the project entirely. No `--` separator needed;
+  everything after `PACKAGE` is forwarded verbatim. **`bgx` is a top-level
+  shortcut for `bougie tool run`** (e.g. `bgx phpstan/phpstan analyse src`).
 - `upgrade [PACKAGE] [--all] [--reinstall]`
 
 ### Dev services — `bougie service`
 
-Shared daemons with per-project tenants, supervised by `bougied`. (Renamed
-from `bougie services`, which still works as a hidden alias.) Catalog
+Shared daemons with per-project tenants, supervised by `bougied`. (The
+plural `bougie services` still works — it's a hidden backward-compatible
+alias — but every user-facing surface uses the singular now.) Catalog
 includes mariadb, redis, opensearch, rabbitmq, mailpit, server (the dev HTTP
 server — declared/added as `server`, not `bougie-server`). `mkcert` is a
 separate tool fetched by `bougie server tls install`, not a catalog entry.
@@ -317,6 +344,13 @@ separate tool fetched by `bougie server tls install`, not a catalog entry.
   tool name exists in several declared services, or isn't curated.
 - `bougie service restart [NAMES...]`
 - `bougie service status [NAME]`
+- `bougie service credentials [NAME] [--env]` — print this project's tenant
+  connection info — including passwords — for wiring up external clients
+  (GUI database tools, API explorers, …). Reads the on-disk tenant ledgers;
+  no daemon required. `--env` emits `KEY='value'` lines using the exact
+  `BOUGIE_SERVICE_*` names `bougie run` injects, for `eval` in a plain
+  shell; takes precedence over `--format`. Inside `bougie run` the same
+  values are already injected as `BOUGIE_SERVICE_*` env vars.
 - `bougie service logs [NAME] [-f|--follow] [-n|--lines N]`
 - `bougie service daemon {status,stop,version}` — inspect/control `bougied`.
 
@@ -361,6 +395,32 @@ print its `<name>.bougie.run` URL, and stream its log (Ctrl-C detaches).
 - `bougie cache {clean, prune [--dry-run] [--prune-projects], dir, size}`
 - `bougie self update [--force]`
 - `bougie self version [--short]`
+
+### Telemetry — `bougie telemetry`
+
+Anonymous, **opt-in** usage stats and crash reports (see `TELEMETRY.md`).
+Non-interactive environments (CI, docker, pipes) are never prompted and
+default to off; `DO_NOT_TRACK=1` or `BOUGIE_TELEMETRY=off|local|on` override.
+
+- `bougie telemetry [status]` — show the mode, its source, and what's spooled
+  (default with no subcommand).
+- `bougie telemetry on` — enable telemetry: record consent, mint the
+  anonymous install id.
+- `bougie telemetry off` — disable entirely (no local recording, nothing
+  sent).
+- `bougie telemetry local` — record events locally but never upload them.
+- `bougie telemetry log [-n|--lines N]` — print locally spooled events
+  (default 20, `0` = all), exactly what would be uploaded.
+- `bougie telemetry reset` — rotate the anonymous install id and purge all
+  spooled events.
+
+### Diagnostics — `bougie diagnose`
+
+- `bougie diagnose [--issue] [-y|--yes] [-- ARGS...]` — assemble a shareable
+  diagnostic report from the last failure (or re-run `ARGS...` with debug
+  logging captured, e.g. `bougie diagnose -- sync --offline`). Shown in full
+  for review; nothing is sent without confirmation (`-y` skips the prompt).
+  `--issue` renders a prefilled GitHub issue instead of uploading.
 
 ## Notes for agents
 
