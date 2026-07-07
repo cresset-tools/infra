@@ -416,11 +416,17 @@ default to off; `DO_NOT_TRACK=1` or `BOUGIE_TELEMETRY=off|local|on` override.
 
 ### Diagnostics — `bougie diagnose`
 
-- `bougie diagnose [--issue] [-y|--yes] [-- ARGS...]` — assemble a shareable
-  diagnostic report from the last failure (or re-run `ARGS...` with debug
-  logging captured, e.g. `bougie diagnose -- sync --offline`). Shown in full
-  for review; nothing is sent without confirmation (`-y` skips the prompt).
-  `--issue` renders a prefilled GitHub issue instead of uploading.
+- `bougie diagnose [--issue] [-y|--yes] [--edit] [--no-edit] [--project DIR] [-- ARGS...]`
+  — assemble a shareable diagnostic report from the last failure (or re-run
+  `ARGS...` with debug logging captured, e.g. `bougie diagnose -- sync
+  --offline`). Interactively, the report opens in `$EDITOR` for review and
+  redaction before upload unless `-y`/`--yes` is passed; `--no-edit` skips
+  the editor pass in favor of a terminal print + confirmation instead, while
+  `--edit` forces the editor pass even with `--yes` (mutually exclusive with
+  `--no-edit`). Nothing is sent without confirmation. `--issue` renders a
+  prefilled GitHub issue instead of uploading. `--project DIR` targets a
+  specific project's services instead of the one around the current
+  directory (or the one recorded with the last failure).
 
 ## Notes for agents
 
