@@ -81,12 +81,19 @@ let
         index index.php;
         location / { try_files $uri $uri/ /index.php$is_args$args; }
         location /static/ {
+          # Strip the cache-busting version prefix and serve the real file.
           location ~ ^/static/version {
             rewrite ^/static/(version\d*/)?(.*)$ /static/$2 last;
           }
-          try_files $uri $uri/ /static/index.php$is_args$args;
+          # If the asset isn't on disk, let Magento's static.php materialize it
+          # (on-demand generation in default/developer mode). `resource=$2` is the
+          # path after /static/[version/]. (Canonical Magento nginx.conf.sample;
+          # the earlier /static/index.php target didn't exist → redirect-cycle 500.)
+          if (!-f $request_filename) {
+            rewrite ^/static/(version\d*/)?(.*)$ /static.php?resource=$2 last;
+          }
         }
-        location /media/ { try_files $uri $uri/ /media/index.php$is_args$args; }
+        location /media/ { try_files $uri $uri/ /get.php$is_args$args; }
         location ~ ^/(index|get|static|errors/report|errors/404|errors/503|health_check)\.php$ {
           try_files $uri =404;
           fastcgi_pass 127.0.0.1:9000;
