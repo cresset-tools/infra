@@ -25,5 +25,11 @@
     "postgres/sconce_password" = { owner = "postgres"; };
     "mariadb/magento_password" = { };
     "magento/crypt_key" = { };
+    # Composer read token for the gated repo.bougie.tools (rendered into the
+    # Magento store's auth.json shared file). Distinct from the service token.
+    "sconce/read_token" = { };
+    # The Magento module's management-API service token (re-injected into store
+    # config under the box crypt key by bin/seed-and-inject).
+    "sconce/service_token" = { };
   };
 }

@@ -30,6 +30,21 @@ let
   # Images built by the flake's `packages.<system>` (with the rust-overlay).
   # This host is x86_64-linux, the only system those packages are built for.
   demoImages = inputs.self.packages.${pkgs.stdenv.hostPlatform.system};
+
+  # Deployer build tools: run under the SAME php the container serves with
+  # (`phpRuntime`, which already carries memory_limit=2G + the full Magento
+  # extension set), so di:compile/static:deploy match the runtime and composer
+  # needs no --ignore-platform-reqs. Exposed on the host PATH for `dep`'s SSH tasks.
+  composerPhar = pkgs.fetchurl {
+    url = "https://getcomposer.org/download/2.10.2/composer.phar";
+    hash = "sha256-XucSX4owo00kbO/cC8hbing7KPKuyWiZQRhRI1DSgCc=";
+  };
+  magentoPhp = pkgs.writeShellScriptBin "magento-php" ''
+    exec ${demoImages.phpRuntime}/bin/php "$@"
+  '';
+  magentoComposer = pkgs.writeShellScriptBin "composer" ''
+    exec ${demoImages.phpRuntime}/bin/php ${composerPhar} "$@"
+  '';
 in
 {
   imports = [
@@ -114,6 +129,13 @@ in
     uid = 990;
     group = "magento";
     description = "Magento app-tree owner (mounted into the container)";
+    # Deployer builds each release over SSH as this user (uid 990 == the
+    # container's runtime uid), so release/shared files are owned correctly with
+    # no chown, and the php that compiles the DI is the php that serves it.
+    home = "/var/lib/magento/home";
+    createHome = true;
+    shell = pkgs.bashInteractive;
+    openssh.authorizedKeys.keys = config.users.users.root.openssh.authorizedKeys.keys;
   };
   users.groups.magento.gid = 990;
 
@@ -160,12 +182,13 @@ in
           ],
           'resource' => ['default_setup' => ['connection' => 'default']],
           'x-frame-options' => 'SAMEORIGIN',
-          // 'default' (not 'production'): the seeded app tree is a developer-mode
-          // build with no compiled DI / deployed static, so Magento must generate
-          // both on demand — which 'default' does (and, unlike 'developer', it
-          // hides stack traces, fit for a public demo). The container's nginx
-          // routes /static/ misses to static.php for on-the-fly materialization.
-          'MAGE_MODE' => 'default',
+          // 'production': the container now serves a Deployer release
+          // (current -> releases/N) whose DI is compiled and static is fully
+          // deployed by `dep deploy`, so nothing is generated on demand. This
+          // env.php is linked read-only into every release; a release built in a
+          // lower mode still serves correctly here because the compiled artifacts
+          // are mode-independent.
+          'MAGE_MODE' => 'production',
           'session' => [
               'save' => 'redis',
               'redis' => [
@@ -224,6 +247,22 @@ in
           ],
           'install' => ['date' => 'Thu, 03 Jul 2026 00:00:00 +0000'],
       ];
+    '';
+  };
+
+  # Composer auth for the gated repo.bougie.tools, materialized read-only into
+  # the Deployer `shared/` tree (below) so every release's auth.json resolves to
+  # it. The read token is the http-basic password (sconce ignores the username).
+  sops.templates."magento-auth-json" = {
+    content = ''
+      {
+          "http-basic": {
+              "repo.bougie.tools": {
+                  "username": "token",
+                  "password": "${config.sops.placeholder."sconce/read_token"}"
+              }
+          }
+      }
     '';
   };
 
@@ -304,13 +343,46 @@ in
     '';
   };
 
-  # Host-state dirs the containers mount. The app tree is populated by the
-  # Phase 4 seed restore; the CAS is written by sconce (runs as root).
+  # Materialize the read-only sops files (env.php + auth.json) into the Deployer
+  # `shared/` tree, so every release symlinks to them. Owned root:magento 0440 —
+  # magento (build + serve) can READ but nothing can WRITE, keeping env.php
+  # read-only. Re-asserts the sops-declared content on every rebuild.
+  systemd.services.demo-magento-shared-seed = {
+    description = "Seed Magento shared/ from sops (env.php, auth.json)";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "podman-magento.service" ];
+    # The rendered sops paths are stable, so a content-only change (e.g. flipping
+    # MAGE_MODE) wouldn't otherwise restart this oneshot and shared/ would keep the
+    # stale file. Re-run whenever the rendered content changes.
+    restartTriggers = [
+      config.sops.templates."magento-env-php".content
+      config.sops.templates."magento-auth-json".content
+    ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      install -D -o root -g magento -m 0440 \
+        ${config.sops.templates."magento-env-php".path} \
+        /var/lib/magento/shared/app/etc/env.php
+      install -D -o root -g magento -m 0440 \
+        ${config.sops.templates."magento-auth-json".path} \
+        /var/lib/magento/shared/auth.json
+    '';
+  };
+
+  # Host-state dirs for the Deployer atomic-release layout (`releases/`+`shared/`
+  # + `current` symlink), owned by the magento build/serve user. The container
+  # mounts the whole /var/lib/magento and serves `current`.
   systemd.tmpfiles.rules = [
-    "d /var/lib/sconce      0755 root    root    -"
-    "d /var/lib/sconce/cas  0755 root    root    -"
-    "d /var/lib/magento     0755 magento magento -"
-    "d /var/lib/magento/app 0755 magento magento -"
+    "d /var/lib/sconce                 0755 root    root    -"
+    "d /var/lib/sconce/cas             0755 root    root    -"
+    "d /var/lib/magento                0755 magento magento -"
+    "d /var/lib/magento/releases       0755 magento magento -"
+    "d /var/lib/magento/shared         0755 magento magento -"
+    "d /var/lib/magento/shared/app     0755 magento magento -"
+    "d /var/lib/magento/shared/app/etc 0755 magento magento -"
   ];
 
   # ---- Containers (rootful podman, host network) ----
@@ -331,10 +403,12 @@ in
       autoStart = true;
       user = "990:990";
       extraOptions = [ "--network=host" ];
-      volumes = [
-        "/var/lib/magento/app:/var/www/html"
-        "${config.sops.templates."magento-env-php".path}:/var/www/html/app/etc/env.php:ro"
-      ];
+      # Mount the whole Deployer tree at the identical path so atomic symlink
+      # swaps (current -> releases/N) are honored live and absolute symlinks
+      # (env.php, auth.json, shared dirs) resolve the same inside the container.
+      # env.php is the release's read-only symlink into shared/, so no separate
+      # bind-mount is needed.
+      volumes = [ "/var/lib/magento:/var/lib/magento" ];
     };
   };
 
@@ -405,7 +479,21 @@ in
 
   environment.systemPackages = with pkgs; [
     curl jq htop
+    # Deployer build toolchain (used over SSH as the magento user): `magento-php`
+    # + `composer` run under the container's phpRuntime; unzip for fast composer
+    # extraction; git for `deploy:update_code` (clones the repo on the box).
+    # `dep` itself runs from the operator's laptop. The private repo is cloned
+    # over the operator's forwarded SSH agent (no github secret lives on the box).
+    magentoPhp magentoComposer unzip git
   ];
+
+  # Trust github.com for the magento user's `git clone` in deploy:update_code
+  # (Deployer 6 clones without a StrictHostKeyChecking override, so an unknown
+  # host key would abort the deploy non-interactively).
+  programs.ssh.knownHosts = {
+    "github.com".publicKey =
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
+  };
 
   # Pin to the version first deployed against; don't bump on upgrades.
   system.stateVersion = "25.11";

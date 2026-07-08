@@ -76,7 +76,7 @@ let
       server {
         listen 8081;
         server_name _;
-        set $MAGE_ROOT /var/www/html;
+        set $MAGE_ROOT /var/lib/magento/current;
         root $MAGE_ROOT/pub;
         index index.php;
         location / { try_files $uri $uri/ /index.php$is_args$args; }
@@ -138,7 +138,7 @@ let
     config = {
       Entrypoint = [ "${magentoEntrypoint}" ];
       ExposedPorts = { "8081/tcp" = { }; };
-      WorkingDir = "/var/www/html";
+      WorkingDir = "/var/lib/magento/current";
     };
   };
 in
