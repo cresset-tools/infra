@@ -299,6 +299,12 @@
         '';
       };
 
+      locations."= /sconce.sh" = {
+        extraConfig = ''
+          return 301 https://releases.bougie.tools/installers/sconce/latest/sconce-installer.sh;
+        '';
+      };
+
       # Public telemetry policy + dashboard. The consent prompts and
       # TELEMETRY.md print bougie.tools/telemetry; the dashboard itself
       # is served by the telemetry host (hosts/telemetry/), which owns

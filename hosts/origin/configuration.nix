@@ -134,6 +134,9 @@
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGzWP/lZQnXRgYQkevlhCISv6YMRZ/QZpZi/+aumetpW magequery CI publish"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINcbN5uEIHhl0Ue7HV+pS3V67eq3oSt7d0znoJZ0Ocgg jibs CI publish"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDC+gfeoHgjUZEHWKhGW4UJq8z2GnfP43LBViQBP7y03 modulargento mirror"
+      # Private half is the PUBLISH_SSH_KEY secret on the sconce repo's
+      # `release` environment (publish-mirror.yml).
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtrlBsNX5a0Wjn/Y6HUKjMIUzmR0ybT4Kt5LQBGLrGB sconce CI publish"
     ];
   };
 
@@ -205,6 +208,9 @@
         /srv/releases/github/jibs \
         /srv/releases/github/jibs/releases \
         /srv/releases/github/jibs/releases/download \
+        /srv/releases/github/sconce \
+        /srv/releases/github/sconce/releases \
+        /srv/releases/github/sconce/releases/download \
         /srv/releases/installers \
         /srv/releases/installers/bougie \
         /srv/releases/installers/bougie/latest \
@@ -213,7 +219,9 @@
         /srv/releases/installers/magequery \
         /srv/releases/installers/magequery/latest \
         /srv/releases/installers/jibs \
-        /srv/releases/installers/jibs/latest
+        /srv/releases/installers/jibs/latest \
+        /srv/releases/installers/sconce \
+        /srv/releases/installers/sconce/latest
       if [ ! -e /srv/index/index.json ]; then
         cat > /srv/index/index.json <<'JSON'
       {
