@@ -160,7 +160,12 @@ in
           ],
           'resource' => ['default_setup' => ['connection' => 'default']],
           'x-frame-options' => 'SAMEORIGIN',
-          'MAGE_MODE' => 'production',
+          // 'default' (not 'production'): the seeded app tree is a developer-mode
+          // build with no compiled DI / deployed static, so Magento must generate
+          // both on demand — which 'default' does (and, unlike 'developer', it
+          // hides stack traces, fit for a public demo). The container's nginx
+          // routes /static/ misses to static.php for on-the-fly materialization.
+          'MAGE_MODE' => 'default',
           'session' => [
               'save' => 'redis',
               'redis' => [
