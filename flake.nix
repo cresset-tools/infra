@@ -12,9 +12,19 @@
       url = "github:nix-community/nixos-anywhere";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # rustc 1.96 for sconce (nixpkgs default lags; pinned from its toolchain file).
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    # Encrypted secrets for hosts/demo (the flake's first secrets framework).
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, determinate, disko, nixos-anywhere }:
+  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, rust-overlay, sops-nix }:
     let
       # CAX11 is aarch64. The deploy/switch helper apps run on the
       # operator's laptop too, so we expose them on both common arches.
@@ -27,6 +37,8 @@
           (final: prev: {
             nix = determinate.inputs.nix.packages.${system}.default;
           })
+          # rust-bin.* for pinning sconce's rustc 1.96 (see demo-images.nix).
+          rust-overlay.overlays.default
         ];
       };
       # Every directory under ./hosts/ becomes a nixosConfigurations entry.
@@ -51,6 +63,9 @@
             else "aarch64-linux";
         in nixpkgs.lib.nixosSystem {
           system = hostSystem;
+          # Pass the flake inputs (and `self`, for `self.packages`) to host
+          # modules — hosts/demo needs inputs.sops-nix + the image packages.
+          specialArgs = { inherit inputs; };
           modules =
             [ (hostDir + "/configuration.nix") ]
             ++ nixpkgs.lib.optionals hasDisko [
@@ -60,6 +75,14 @@
         };
     in {
       nixosConfigurations = nixpkgs.lib.genAttrs hostNames mkHost;
+
+      # Nix-built OCI images for the demo host (built here, loaded via
+      # oci-containers imageFile). Also `nix build .#sconceImage` to inspect.
+      packages.${system} =
+        let images = import ./demo-images.nix { inherit pkgs; };
+        in {
+          inherit (images) sconce sconceImage phpRuntime magentoImage;
+        };
 
       apps.${system} = {
         # `nix run .#deploy -- <host> <ip>` from a fresh laptop. Wraps
