@@ -134,11 +134,9 @@
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGzWP/lZQnXRgYQkevlhCISv6YMRZ/QZpZi/+aumetpW magequery CI publish"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINcbN5uEIHhl0Ue7HV+pS3V67eq3oSt7d0znoJZ0Ocgg jibs CI publish"
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDC+gfeoHgjUZEHWKhGW4UJq8z2GnfP43LBViQBP7y03 modulargento mirror"
-      # TODO(sconce): paste sconce's CI publish public key here, then set the
-      # matching private key as the PUBLISH_SSH_KEY secret on the sconce repo's
-      # `release` environment. Generate with:
-      #   ssh-keygen -t ed25519 -C "sconce CI publish" -f sconce_ci -N ""
-      # "ssh-ed25519 AAAA... sconce CI publish"
+      # Private half is the PUBLISH_SSH_KEY secret on the sconce repo's
+      # `release` environment (publish-mirror.yml).
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtrlBsNX5a0Wjn/Y6HUKjMIUzmR0ybT4Kt5LQBGLrGB sconce CI publish"
     ];
   };
 
