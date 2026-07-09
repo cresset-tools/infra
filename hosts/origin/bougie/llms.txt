@@ -269,6 +269,18 @@ default when patches are declared; suppress with `--no-patches`.
   `patches/` files, `http://` URLs, missing checksums, unadopted dependency
   patches.
 
+### Registry authentication — `bougie login`
+
+- `bougie login URL` — authenticate against a sconce Composer registry via the
+  OAuth 2.0 device authorization grant (RFC 8628): start a flow, print a short
+  user code, open the approval page, and poll until a signed-in team member
+  approves it in the browser. No callback listener — only outbound requests —
+  so it works over SSH and in containers. On approval, an org-scoped read
+  token is stored in bougie's credential store (`auth.json`) keyed by origin
+  (`host[:port]`), exactly where the resolver looks it up, so every
+  repository the registry serves under that host authenticates with one
+  credential.
+
 ### Composer — `bougie composer`
 
 All listed subcommands are **native** reimplementations (byte-equivalent to
@@ -353,6 +365,18 @@ separate tool fetched by `bougie server tls install`, not a catalog entry.
   values are already injected as `BOUGIE_SERVICE_*` env vars.
 - `bougie service logs [NAME] [-f|--follow] [-n|--lines N]`
 - `bougie service daemon {status,stop,version}` — inspect/control `bougied`.
+
+### Dev database — `bougie db`
+
+- `bougie db seed --from PATH_OR_URL [--clean]` — load a jibs `.jibsdump`
+  snapshot into the project's mariadb tenant, giving a local database shaped
+  like production. `--from` accepts a local path or an `http(s)` URL (e.g. a
+  presigned snapshot); the snapshot is produced by jibs, anonymized
+  server-side. bougie doesn't bundle jibs: like `bougie format` does for
+  `wick`, it downloads a pinned `jibs` binary on first use (mirror→GitHub +
+  SHA-256 verified) and resolves the tenant's connection info offline from
+  the tenant ledger. `--clean` discards leftover state from a previous
+  interrupted load.
 
 ### Cross-project tenants — `bougie projects`
 
