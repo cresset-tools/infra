@@ -151,6 +151,16 @@ in
     '';
   };
 
+  # The admin UI container's env: same DB + secret key (it recovers/displays
+  # license keys), plus the single-tenant basic-auth password.
+  sops.templates."sconce-ui-env" = {
+    content = ''
+      DATABASE_URL=postgresql://sconce:${config.sops.placeholder."postgres/sconce_password"}@127.0.0.1:5432/sconce
+      SCONCE_SECRET_KEY=${config.sops.placeholder."sconce/secret_key"}
+      SCONCE_ADMIN_PASSWORD=${config.sops.placeholder."sconce/admin_password"}
+    '';
+  };
+
   # Magento reads env.php from inside the container as uid 990; render it
   # owned by that user, and bind-mount it over the seeded app tree (below) so
   # the crypt key + DB password never live in the app-tree state on disk.
@@ -451,6 +461,25 @@ in
       volumes = [ "/var/lib/sconce/cas:/var/lib/sconce/cas" ];
       environmentFiles = [ config.sops.templates."sconce-env".path ];
     };
+    # The operator dashboard (admin.bougie.tools). Same image as `sconce`, but
+    # running the `ui` listener in single-tenant mode: no user accounts, gated
+    # by HTTP basic auth (any username; the sops admin_password). Loopback-only
+    # — nginx terminates TLS and proxies to it.
+    containers.sconce-ui = {
+      image = "sconce:demo";
+      imageFile = demoImages.sconceImage;
+      autoStart = true;
+      extraOptions = [ "--network=host" ];
+      cmd = [
+        "ui"
+        "--single-tenant"
+        "--listen"
+        "127.0.0.1:8082"
+        "--public-base-url"
+        "https://repo.bougie.tools"
+      ];
+      environmentFiles = [ config.sops.templates."sconce-ui-env".path ];
+    };
     containers.magento = {
       image = "magento:demo";
       imageFile = demoImages.magentoImage;
@@ -471,6 +500,10 @@ in
   # unit is ordering-only (harmless if the unit name shifts); the hard
   # dependency is on the password oneshot this config owns.
   systemd.services.podman-sconce = {
+    after = [ "postgresql.service" "demo-postgres-password.service" ];
+    requires = [ "demo-postgres-password.service" ];
+  };
+  systemd.services.podman-sconce-ui = {
     after = [ "postgresql.service" "demo-postgres-password.service" ];
     requires = [ "demo-postgres-password.service" ];
   };
@@ -513,6 +546,14 @@ in
       forceSSL = true;
       extraConfig = "client_max_body_size 64m;";
       locations."/".proxyPass = "http://127.0.0.1:8081";
+    };
+
+    # The sconce operator dashboard (single-tenant UI container). App-level
+    # HTTP basic auth (SCONCE_ADMIN_PASSWORD) on top of TLS.
+    virtualHosts."admin.bougie.tools" = {
+      enableACME = true;
+      forceSSL = true;
+      locations."/".proxyPass = "http://127.0.0.1:8082";
     };
   };
 

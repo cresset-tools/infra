@@ -31,5 +31,9 @@
     # The Magento module's management-API service token (re-injected into store
     # config under the box crypt key by bin/seed-and-inject).
     "sconce/service_token" = { };
+    # HTTP basic-auth password for the sconce admin UI (admin.bougie.tools,
+    # single-tenant mode). Read it when needed with:
+    #   sops -d --extract '["sconce"]["admin_password"]' secrets/demo.yaml
+    "sconce/admin_password" = { };
   };
 }
