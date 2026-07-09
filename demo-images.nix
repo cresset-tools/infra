@@ -12,8 +12,8 @@ let
   sconceSrc = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "sconce";
-    rev = "4263985bc533e0c9930c7aae8759a1afca5c5612";
-    hash = "sha256-naL7FyMtkNYjYO71KLBGwrslUVJV4cWeMQaxN72qC6s=";
+    rev = "28bc7d617e438278c2629ac48533c273a2711fcb";
+    hash = "sha256-9Xj+buobRXmp8Rpg9Vygeka+Bzs4DA6KlQ30N9azRiI=";
   };
   rustToolchain = pkgs.rust-bin.fromRustupToolchainFile "${sconceSrc}/rust-toolchain.toml";
   rustPlatform = pkgs.makeRustPlatform { cargo = rustToolchain; rustc = rustToolchain; };
