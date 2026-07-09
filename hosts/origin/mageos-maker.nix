@@ -37,23 +37,23 @@ let
 
   php = pkgs.php84;
 
-  # Pinned maker source — cresset-tools/mageos-maker `main` @ 437033c
-  # (PR #55: additive "inverse" build mode — start from the minimal edition
-  # and `require` what you add, instead of full edition + `replace`. Ships
-  # the service layer + CLI + API guards and the Build Canvas profile card
-  # ("Mage-OS Minimal", mode note + locked in-minimal rendering). Works on
-  # both distributions for 3.1.0 — the modulargento minimal edition is live
-  # on modulargento.cresset.tools since 2026-07-04. The daily
-  # mageos-maker-catalog refresh keeps the minimal metapackage metadata the
-  # additive UI derives from up to date.) No new composer/npm deps —
-  # composer.lock / package-lock.json unchanged, so vendorHash + npmDepsHash
-  # below stay put — only rev + hash move. (Bump with
-  # scripts/update-mageos-maker.sh.) On top: d8eba62 (inline affecthint), 375f87e (additive-aware install tree / package count), 437033c (dock tab strip flex:none).
+  # Pinned maker source — cresset-tools/mageos-maker `main` @ b4d2565
+  # (b4d2565: the bougie install-command copy buttons no longer copy the
+  # leading "# Install bougie…" comment line — those lines are marked
+  # .cmd-cmt and stripped in copyCmd, so a click yields just the command.
+  # Builds on the additive "inverse" build mode from PR #55: start from the
+  # minimal edition and `require` what you add, instead of full edition +
+  # `replace`. The daily mageos-maker-catalog refresh keeps the minimal
+  # metapackage metadata the additive UI derives from up to date.) No new
+  # composer/npm deps — composer.lock / package-lock.json unchanged, so
+  # vendorHash + npmDepsHash below stay put — only rev + hash move. (Bump
+  # with scripts/update-mageos-maker.sh.) On top of 437033c: b4d2565
+  # (bougie copy omits the # comment line).
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "437033caf44d829831c858321732343c1dbea821";
-    hash = "sha256-H+8CNIcxeS1v4FHSTJFHKKW3Ko8dfFHTEQl/lzvupbE=";
+    rev = "b4d2565ea99d3d11abe83203ffb569b9efdd217d";
+    hash = "sha256-49SNMQG6QN05PxvRH4ywFJD1kq1QG3xEndLTlK+P3E4=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
