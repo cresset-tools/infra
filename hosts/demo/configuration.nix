@@ -372,6 +372,34 @@ in
     '';
   };
 
+  # Magento cron, run against the current release with the same php that serves
+  # it. This is not optional plumbing: indexers, scheduled jobs, AND the MysqlMq
+  # message-queue consumers all hang off cron — the Mollie module's webhook
+  # controller only *queues* transactions (payment/mollie_general queue mode),
+  # so without cron a paid order sits in pending_payment forever. cron:run also
+  # spawns the consumers_runner each minute (env.php has no cron_consumers_runner
+  # override → Magento default: enabled).
+  systemd.services.magento-cron = {
+    description = "Magento cron:run (current release)";
+    serviceConfig = {
+      Type = "oneshot";
+      User = "magento";
+      Group = "magento";
+      WorkingDirectory = "/var/lib/magento/current";
+      ExecStart = "/run/current-system/sw/bin/magento-php /var/lib/magento/current/bin/magento cron:run";
+    };
+    # No release deployed yet (fresh box) -> skip instead of failing the unit.
+    unitConfig.ConditionPathExists = "/var/lib/magento/current/bin/magento";
+  };
+  systemd.timers.magento-cron = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = "minutely";
+      # No catch-up storm after downtime; cron_schedule reconciles itself.
+      Persistent = false;
+    };
+  };
+
   # Host-state dirs for the Deployer atomic-release layout (`releases/`+`shared/`
   # + `current` symlink), owned by the magento build/serve user. The container
   # mounts the whole /var/lib/magento and serves `current`.
