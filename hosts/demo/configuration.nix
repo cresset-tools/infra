@@ -400,6 +400,32 @@ in
     };
   };
 
+  # The payment-critical queue consumer, supervised. Magento's own
+  # consumers_runner (the `consumers` cron group) spawns this too, but that
+  # spawner keeps its bookkeeping in the Magento cache — a cache:flush (every
+  # deploy!) stalled it for ~10 minutes, which for the Mollie webhook queue
+  # means paid orders sitting in pending_payment. Run it under systemd as well:
+  # --single-thread takes a per-consumer lock, so whichever instance starts
+  # first wins and the other exits — no double consumption. max-messages +
+  # RuntimeMaxSec recycle the process so it never runs a stale release's code
+  # for long after a deploy (the symlinked release path is resolved at spawn).
+  systemd.services.magento-consumer-mollie = {
+    description = "Magento queue consumer: mollie.transaction.processor";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "mysql.service" ];
+    serviceConfig = {
+      User = "magento";
+      Group = "magento";
+      WorkingDirectory = "/var/lib/magento/current";
+      ExecStart = "/run/current-system/sw/bin/magento-php /var/lib/magento/current/bin/magento queue:consumers:start mollie.transaction.processor --single-thread --max-messages=1000";
+      Restart = "always";
+      # Calm restarts while a Magento-spawned twin holds the single-thread lock.
+      RestartSec = 60;
+      RuntimeMaxSec = 900;
+    };
+    unitConfig.ConditionPathExists = "/var/lib/magento/current/bin/magento";
+  };
+
   # Host-state dirs for the Deployer atomic-release layout (`releases/`+`shared/`
   # + `current` symlink), owned by the magento build/serve user. The container
   # mounts the whole /var/lib/magento and serves `current`.
