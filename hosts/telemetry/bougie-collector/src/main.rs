@@ -262,6 +262,10 @@ fn rollup_day(db: &Connection, day: &str) -> rusqlite::Result<()> {
     let grouped: &[(&str, &str)] = &[
         ("command", "SELECT name, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
         ("outcome", "SELECT outcome, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
+        // command × outcome cross for failures only: which verbs fail,
+        // and into which category — the `other` share per verb is what
+        // drives the bougie error-taxonomy widening.
+        ("failure", "SELECT name || ' → ' || outcome, count(*) FROM command_events WHERE received_day = ?1 AND outcome != 'ok' GROUP BY 1"),
         ("version", "SELECT version, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
         ("platform", "SELECT os || '/' || arch || '/' || libc, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
         ("ci", "SELECT CASE WHEN ci = 1 THEN 'ci' ELSE 'interactive' END, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
@@ -1193,6 +1197,8 @@ mod tests {
         let mut b = valid_command();
         b["name"] = serde_json::json!("cache");
         b["install_id"] = serde_json::json!("22222222-2222-4222-8222-222222222222");
+        b["outcome"] = serde_json::json!("other");
+        b["exit_code"] = serde_json::json!(1);
         assert!(insert_event(&db, "2026-07-03", &a).is_some());
         assert!(insert_event(&db, "2026-07-03", &b).is_some());
         rollup_day(&db, "2026-07-03").unwrap();
@@ -1223,6 +1229,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(gd, 2);
+        // The failure cross records only the non-ok event; a's ok row
+        // must not appear under the failure dim.
+        let failure_rows: Vec<(String, i64)> = {
+            let mut stmt = db
+                .prepare("SELECT key, count FROM daily_dim WHERE dim='failure'")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .unwrap()
+                .flatten()
+                .collect();
+            rows
+        };
+        assert_eq!(failure_rows, vec![("cache → other".to_owned(), 1)]);
 
         // Rollups are frozen once raw is gone: prune raw, re-rollup,
         // rows survive (rollup_day no-ops on empty days).
