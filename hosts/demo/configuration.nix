@@ -152,7 +152,12 @@ in
     home = "/var/lib/magento/home";
     createHome = true;
     shell = pkgs.bashInteractive;
-    openssh.authorizedKeys.keys = config.users.users.root.openssh.authorizedKeys.keys;
+    openssh.authorizedKeys.keys = config.users.users.root.openssh.authorizedKeys.keys ++ [
+      # CI deploy key: the bougie-license-demo GitHub Action runs Deployer as
+      # this user; the same key is a read-only deploy key on that repo so the
+      # box's `deploy:update_code` clone works via the forwarded agent.
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPiKvws/pN2bc6Y5AkU6TP45mRh5ew/e/UZMsfmlaEN bougie-license-demo CI deploy"
+    ];
   };
   users.groups.magento.gid = 990;
 
