@@ -269,18 +269,6 @@ default when patches are declared; suppress with `--no-patches`.
   `patches/` files, `http://` URLs, missing checksums, unadopted dependency
   patches.
 
-### Registry authentication — `bougie login`
-
-- `bougie login URL` — authenticate against a sconce Composer registry via the
-  OAuth 2.0 device authorization grant (RFC 8628): start a flow, print a short
-  user code, open the approval page, and poll until a signed-in team member
-  approves it in the browser. No callback listener — only outbound requests —
-  so it works over SSH and in containers. On approval, an org-scoped read
-  token is stored in bougie's credential store (`auth.json`) keyed by origin
-  (`host[:port]`), exactly where the resolver looks it up, so every
-  repository the registry serves under that host authenticates with one
-  credential.
-
 ### Composer — `bougie composer`
 
 All listed subcommands are **native** reimplementations (byte-equivalent to
@@ -366,18 +354,6 @@ separate tool fetched by `bougie server tls install`, not a catalog entry.
 - `bougie service logs [NAME] [-f|--follow] [-n|--lines N]`
 - `bougie service daemon {status,stop,version}` — inspect/control `bougied`.
 
-### Dev database — `bougie db`
-
-- `bougie db seed --from PATH_OR_URL [--clean]` — load a jibs `.jibsdump`
-  snapshot into the project's mariadb tenant, giving a local database shaped
-  like production. `--from` accepts a local path or an `http(s)` URL (e.g. a
-  presigned snapshot); the snapshot is produced by jibs, anonymized
-  server-side. bougie doesn't bundle jibs: like `bougie format` does for
-  `wick`, it downloads a pinned `jibs` binary on first use (mirror→GitHub +
-  SHA-256 verified) and resolves the tenant's connection info offline from
-  the tenant ledger. `--clean` discards leftover state from a previous
-  interrupted load.
-
 ### Cross-project tenants — `bougie projects`
 
 - `bougie projects list [--alloc]` — list every provisioned tenant across
@@ -440,7 +416,7 @@ default to off; `DO_NOT_TRACK=1` or `BOUGIE_TELEMETRY=off|local|on` override.
 
 ### Diagnostics — `bougie diagnose`
 
-- `bougie diagnose [--issue] [-y|--yes] [--edit] [--no-edit] [--project DIR] [-- ARGS...]`
+- `bougie diagnose [--issue] [-y|--yes] [--edit] [--no-edit] [--last] [--project DIR] [-- ARGS...]`
   — assemble a shareable diagnostic report from the last failure (or re-run
   `ARGS...` with debug logging captured, e.g. `bougie diagnose -- sync
   --offline`). Interactively, the report opens in `$EDITOR` for review and
@@ -448,7 +424,9 @@ default to off; `DO_NOT_TRACK=1` or `BOUGIE_TELEMETRY=off|local|on` override.
   the editor pass in favor of a terminal print + confirmation instead, while
   `--edit` forces the editor pass even with `--yes` (mutually exclusive with
   `--no-edit`). Nothing is sent without confirmation. `--issue` renders a
-  prefilled GitHub issue instead of uploading. `--project DIR` targets a
+  prefilled GitHub issue instead of uploading. `--last` prints the locally
+  recorded recent failures (a repeat-collapsing ring, capped at 10) and
+  exits — nothing is collected, rendered, or sent. `--project DIR` targets a
   specific project's services instead of the one around the current
   directory (or the one recorded with the last failure).
 
