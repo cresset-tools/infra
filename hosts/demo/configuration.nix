@@ -45,6 +45,23 @@ let
   magentoComposer = pkgs.writeShellScriptBin "composer" ''
     exec ${demoImages.phpRuntime}/bin/php ${composerPhar} "$@"
   '';
+  # bougie (cresset-tools/bougie, public) — the deploy's package installer:
+  # `bougie composer install` natively reimplements composer install (incl.
+  # the two Magento install plugins) and cuts the vendors step from ~13s to
+  # ~1s. The musl release build is fully static, so it runs on NixOS as-is.
+  bougie = pkgs.stdenv.mkDerivation rec {
+    pname = "bougie";
+    version = "0.48.0";
+    src = pkgs.fetchurl {
+      url = "https://github.com/cresset-tools/bougie/releases/download/bougie-v${version}/bougie-x86_64-unknown-linux-musl.tar.gz";
+      hash = "sha256:0p02vx0nxpfm2cjkixmfjhq1hfp6lsz9b2i9j97nv9d90wvk43qz";
+    };
+    sourceRoot = ".";
+    dontBuild = true;
+    installPhase = ''
+      install -Dm755 $(find . -name bougie -type f | head -1) $out/bin/bougie
+    '';
+  };
 in
 {
   imports = [
@@ -579,7 +596,7 @@ in
     # extraction; git for `deploy:update_code` (clones the repo on the box).
     # `dep` itself runs from the operator's laptop. The private repo is cloned
     # over the operator's forwarded SSH agent (no github secret lives on the box).
-    magentoPhp magentoComposer unzip git
+    magentoPhp magentoComposer unzip git bougie
   ];
 
   # Trust github.com for the magento user's `git clone` in deploy:update_code
