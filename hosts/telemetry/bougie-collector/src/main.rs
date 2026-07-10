@@ -266,6 +266,11 @@ fn rollup_day(db: &Connection, day: &str) -> rusqlite::Result<()> {
         // and into which category — the `other` share per verb is what
         // drives the bougie error-taxonomy widening.
         ("failure", "SELECT name || ' → ' || outcome, count(*) FROM command_events WHERE received_day = ?1 AND outcome != 'ok' GROUP BY 1"),
+        // Same cross weighted by distinct installs per day. Summed over
+        // days this reads as install-days: a runaway retry loop counts
+        // once per day instead of once per event (a real machine burst
+        // 1,555 events into one hour and buried every other row).
+        ("failure-installs", "SELECT name || ' → ' || outcome, count(DISTINCT install_id) FROM command_events WHERE received_day = ?1 AND outcome != 'ok' GROUP BY 1"),
         ("version", "SELECT version, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
         ("platform", "SELECT os || '/' || arch || '/' || libc, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
         ("ci", "SELECT CASE WHEN ci = 1 THEN 'ci' ELSE 'interactive' END, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
@@ -1201,6 +1206,9 @@ mod tests {
         b["exit_code"] = serde_json::json!(1);
         assert!(insert_event(&db, "2026-07-03", &a).is_some());
         assert!(insert_event(&db, "2026-07-03", &b).is_some());
+        // b's install fails the same way twice more — a retry burst.
+        assert!(insert_event(&db, "2026-07-03", &b).is_some());
+        assert!(insert_event(&db, "2026-07-03", &b).is_some());
         rollup_day(&db, "2026-07-03").unwrap();
 
         let (events, installs): (i64, i64) = db
@@ -1210,7 +1218,7 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!((events, installs), (2, 2));
+        assert_eq!((events, installs), (4, 2));
         let sync_n: i64 = db
             .query_row(
                 "SELECT count FROM daily_dim WHERE day='2026-07-03' AND dim='command' AND key='sync'",
@@ -1228,21 +1236,23 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(gd, 2);
-        // The failure cross records only the non-ok event; a's ok row
-        // must not appear under the failure dim.
-        let failure_rows: Vec<(String, i64)> = {
+        assert_eq!(gd, 4);
+        // The failure cross records only non-ok events (a's ok row must
+        // not appear), and the install-weighted twin collapses b's
+        // three-event burst to its one install.
+        let failure_dim = |dim: &str| -> Vec<(String, i64)> {
             let mut stmt = db
-                .prepare("SELECT key, count FROM daily_dim WHERE dim='failure'")
+                .prepare("SELECT key, count FROM daily_dim WHERE dim = ?1")
                 .unwrap();
             let rows = stmt
-                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .query_map([dim], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
                 .unwrap()
                 .flatten()
                 .collect();
             rows
         };
-        assert_eq!(failure_rows, vec![("cache → other".to_owned(), 1)]);
+        assert_eq!(failure_dim("failure"), vec![("cache → other".to_owned(), 3)]);
+        assert_eq!(failure_dim("failure-installs"), vec![("cache → other".to_owned(), 1)]);
 
         // Rollups are frozen once raw is gone: prune raw, re-rollup,
         // rows survive (rollup_day no-ops on empty days).
@@ -1253,7 +1263,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(still, 2);
+        assert_eq!(still, 4);
     }
 
     #[test]
