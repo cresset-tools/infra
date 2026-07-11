@@ -2,7 +2,7 @@
 
 > A "uv for PHP": a single static binary that is a Composer-compatible package
 > manager, a PHP toolchain manager, an isolated-CLI-tool runner, a dev HTTP/
-> FastCGI server, and a dev-services daemon (mariadb, redis, opensearch,
+> FastCGI server, and a dev-services daemon (mariadb, mysql, redis, opensearch,
 > rabbitmq, …). Written in Rust; cross-platform (Linux / macOS / Windows). The
 > Composer resolver, autoloader, and `json_encode` are reimplemented natively
 > and match Composer 2.8.12 byte-for-byte. The `services` daemon stack is
@@ -322,9 +322,13 @@ Isolated, globally-installed PHP CLIs. Identifier is `vendor/name[@constraint]`.
 Shared daemons with per-project tenants, supervised by `bougied`. (The
 plural `bougie services` still works — it's a hidden backward-compatible
 alias — but every user-facing surface uses the singular now.) Catalog
-includes mariadb, redis, opensearch, rabbitmq, mailpit, server (the dev HTTP
-server — declared/added as `server`, not `bougie-server`). `mkcert` is a
+includes mariadb, mysql (8.4 LTS / 8.0, real MySQL alongside mariadb),
+redis, opensearch, rabbitmq, mailpit, server (the dev HTTP server —
+declared/added as `server`, not `bougie-server`). `mkcert` is a
 separate tool fetched by `bougie server tls install`, not a catalog entry.
+Multiple versions of the same service can run side by side (e.g. `mysql@8.4`
+next to `mysql@8.0` in a sibling project) — each `(name, version)` pair gets
+its own tenant tree and port allocation.
 
 - `bougie service up [NAMES...] [-d|--detach]` — start declared (or named)
   services and provision this project's tenant. Attaches to the combined log
@@ -341,7 +345,11 @@ separate tool fetched by `bougie server tls install`, not a catalog entry.
   project's tenant. Curated tools are also linked into `vendor/bougie/bin/`
   at sync / `service add` time, so inside `bougie run` / recipes they
   resolve by bare name (no daemon round-trip). Pass `--service` when the
-  tool name exists in several declared services, or isn't curated.
+  tool name exists in several declared services, or isn't curated. The
+  `mysql`/`mysqldump`/`mysqladmin` bare names are curated for the
+  `mariadb` service, not `mysql` — a project running the real `mysql`
+  service reaches its own client only via `bougie service exec mysql --
+  mysql ...` (or `-- mysqldump`, `-- mysqladmin`).
 - `bougie service restart [NAMES...]`
 - `bougie service status [NAME]`
 - `bougie service credentials [NAME] [--env]` — print this project's tenant
