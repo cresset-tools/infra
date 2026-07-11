@@ -45,6 +45,17 @@ let
   magentoComposer = pkgs.writeShellScriptBin "composer" ''
     exec ${demoImages.phpRuntime}/bin/php ${composerPhar} "$@"
   '';
+  # cachetool (phar, run by magento-php) — the deploy's post-symlink opcache
+  # reset, talking fastcgi to the container's php-fpm on 127.0.0.1:9000 (host
+  # network). Provided here so Deployer's cachetool contrib never falls back to
+  # its download-at-runtime default.
+  cachetoolPhar = pkgs.fetchurl {
+    url = "https://github.com/gordalina/cachetool/releases/download/10.0.0/cachetool.phar";
+    hash = "sha256:07dxhclblbz4apf77q1k42fsj8xrq99sg4mm4vzflyyyrmx0xsfb";
+  };
+  cachetool = pkgs.runCommand "cachetool-phar" { } ''
+    install -Dm644 ${cachetoolPhar} $out/bin/cachetool.phar
+  '';
   # bougie (cresset-tools/bougie, public) — the deploy's package installer:
   # `bougie composer install` natively reimplements composer install (incl.
   # the two Magento install plugins) and cuts the vendors step from ~13s to
@@ -469,6 +480,9 @@ in
     "d /var/lib/magento/shared         0755 magento magento -"
     "d /var/lib/magento/shared/app     0755 magento magento -"
     "d /var/lib/magento/shared/app/etc 0755 magento magento -"
+    # cachetool's fcgi temp files: must be visible to the container's php-fpm
+    # at the same path (the whole /var/lib/magento is mounted identically).
+    "d /var/lib/magento/tmp            0755 magento magento -"
   ];
 
   # ---- Containers (rootful podman, host network) ----
@@ -601,7 +615,7 @@ in
     # extraction; git for `deploy:update_code` (clones the repo on the box).
     # `dep` itself runs from the operator's laptop. The private repo is cloned
     # over the operator's forwarded SSH agent (no github secret lives on the box).
-    magentoPhp magentoComposer unzip git bougie
+    magentoPhp magentoComposer unzip git bougie cachetool
   ];
 
   # Trust github.com for the magento user's `git clone` in deploy:update_code
