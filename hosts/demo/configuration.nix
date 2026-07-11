@@ -19,7 +19,6 @@
 # with this box's SSH host key). Nothing secret is in the Nix store or git.
 #
 # TODOs before / at go-live (Phase 4+), deliberately not wired here yet:
-#   - static IPv6 out of the box's routed /64 (added once Hetzner assigns it);
 #   - restore the Magento app tree seed into /var/lib/magento/app;
 #   - provision a sconce service token for the Magento module's key calls;
 #   - re-apply the Mollie test key into Magento config under the new crypt key;
@@ -469,6 +468,29 @@ in
     unitConfig.ConditionPathExists = "/var/lib/magento/current/bin/magento";
   };
 
+  # Deploys pause the Magento cron machinery around the release swap (no new
+  # cron:run against a half-swapped tree; the queue consumer restarts onto the
+  # new release immediately instead of riding out RuntimeMaxSec on stale code).
+  # Deployer runs as `magento`, so authorize exactly those unit operations via
+  # polkit — scoped to the three magento units and the three verbs, nothing
+  # else (deliberately not sudo: no shell, no argv surface, just D-Bus).
+  security.polkit.enable = true;
+  security.polkit.extraConfig = ''
+    polkit.addRule(function (action, subject) {
+      if (action.id == "org.freedesktop.systemd1.manage-units" &&
+          subject.user == "magento") {
+        var unit = action.lookup("unit");
+        var verb = action.lookup("verb");
+        if ((unit == "magento-cron.timer" ||
+             unit == "magento-cron.service" ||
+             unit == "magento-consumer-mollie.service") &&
+            (verb == "start" || verb == "stop" || verb == "restart")) {
+          return polkit.Result.YES;
+        }
+      }
+    });
+  '';
+
   # Host-state dirs for the Deployer atomic-release layout (`releases/`+`shared/`
   # + `current` symlink), owned by the magento build/serve user. The container
   # mounts the whole /var/lib/magento and serves `current`.
@@ -610,12 +632,12 @@ in
 
   environment.systemPackages = with pkgs; [
     curl jq htop
-    # Deployer build toolchain (used over SSH as the magento user): `magento-php`
-    # + `composer` run under the container's phpRuntime; unzip for fast composer
-    # extraction; git for `deploy:update_code` (clones the repo on the box).
-    # `dep` itself runs from the operator's laptop. The private repo is cloned
-    # over the operator's forwarded SSH agent (no github secret lives on the box).
-    magentoPhp magentoComposer unzip git bougie cachetool
+    # Deployer server-side toolchain (used over SSH as the magento user):
+    # `magento-php` + `composer` run under the container's phpRuntime (kept for
+    # fallback box builds and one-off bin/magento runs — releases normally
+    # arrive as CI-built artifacts); redis for the deploy's old-cache-namespace
+    # prune (redis-cli scan/unlink of the previous release's id_prefix keys).
+    magentoPhp magentoComposer unzip git bougie cachetool redis
   ];
 
   # Trust github.com for the magento user's `git clone` in deploy:update_code
