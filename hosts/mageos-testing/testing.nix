@@ -15,7 +15,7 @@
 let
   user = "mageos-testing";
   stateDir = "/srv/mageos-testing";
-  domain = "mageos-tests.bougie.tools";
+  domain = "mageos-tests.cresset.tools";
   workers = 10;
 
   # bougie's musl release build is fully static and runs on NixOS as-is
