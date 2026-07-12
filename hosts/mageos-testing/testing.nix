@@ -162,22 +162,28 @@ in
 
   # bougied spawns service processes with a hardcoded PATH=/usr/bin:/bin
   # (crates/bougie-daemon .. provisioners/rabbitmq.rs), and the runtimes'
-  # shell launchers need dirname/sed/grep there. envfs materializes
-  # /usr/bin/* on demand — but PATH-cleared callers (exactly this case)
-  # only see envfs's fallback set, which ships just env+sh, so extend it
-  # with the FHS staples the service launchers use.
-  services.envfs = {
-    enable = true;
-    extraFallbackPathCommands = ''
-      mkdir -p "$out/bin"
-      for pkg in ${pkgs.coreutils} ${pkgs.gnused} ${pkgs.gnugrep} \
-                 ${pkgs.gawk} ${pkgs.findutils} ${pkgs.procps} \
-                 ${pkgs.gnutar} ${pkgs.gzip} ${pkgs.util-linux}; do
-        for bin in "$pkg"/bin/*; do
-          ln -sf "$bin" "$out/bin/$(basename "$bin")"
-        done
-      done
-    '';
+  # shell launchers need dirname/sed/grep there. Bind-mount a real FHS
+  # tool set onto /usr/bin — envfs was tried first but only resolves
+  # exec-style access, not the stat-based lookups shells do.
+  fileSystems."/usr/bin" = {
+    device = "${pkgs.buildEnv {
+      name = "fhs-usr-bin";
+      paths = with pkgs; [
+        coreutils
+        findutils
+        gawk
+        gnugrep
+        gnused
+        gnutar
+        gzip
+        procps
+        util-linux
+        which
+      ];
+      pathsToLink = [ "/bin" ];
+    }}/bin";
+    fsType = "none";
+    options = [ "bind" "nofail" ];
   };
 
   programs.ssh.knownHosts.github = {
