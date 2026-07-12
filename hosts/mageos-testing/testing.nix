@@ -78,10 +78,13 @@ let
     exec > >(tee "$LOG") 2>&1
     echo "=== testing mageos/main $NEW (previous: ''${LAST:-none}) $(date -Is) ==="
 
-    # The worktree is disposable — the branch is the source of truth.
-    # bougie sync/pin normalize tracked files (composer.json formatting),
-    # and a dirty tree blocks the rebase on the next run.
-    git reset --hard -q
+    # The fork's branch is the source of truth: harness improvements are
+    # pushed there from elsewhere, and without this sync our post-rebase
+    # force-push would clobber them. The worktree itself is disposable
+    # (bougie sync normalizes tracked files; a dirty tree blocks rebase).
+    git fetch origin mageos-testing -q || echo "warning: could not fetch fork branch"
+    git checkout -q mageos-testing
+    git reset --hard -q origin/mageos-testing 2>/dev/null || git reset --hard -q
 
     # Carry the harness branch onto the new upstream commit. A conflict
     # means upstream touched a patched file — stop loudly rather than test
