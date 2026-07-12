@@ -153,6 +153,13 @@ in
   # `ld-linux-x86-64.so.2 <bougie php> -v` runs with zero missing libs).
   programs.nix-ld.enable = true;
 
+  # bougied spawns service processes with a hardcoded PATH=/usr/bin:/bin
+  # (crates/bougie-daemon .. provisioners/rabbitmq.rs), and the runtimes'
+  # shell launchers need dirname/sed/grep there. envfs materializes
+  # /usr/bin/* on demand, with a coreutils fallback for PATH-cleared
+  # callers — exactly this case.
+  services.envfs.enable = true;
+
   programs.ssh.knownHosts.github = {
     hostNames = [ "github.com" ];
     publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
