@@ -281,7 +281,9 @@ in
               'config_integration' => 1,
               'config_integration_api' => 1,
               'graphql_query_resolver_result' => 1,
-              'full_page' => 1,
+              // Deliberately OFF: the demo wants raw php render times visible,
+              // not FPC hits. Re-enable when demoing production performance.
+              'full_page' => 0,
               'config_webservice' => 1,
               'translate' => 1,
               'vertex' => 1,
