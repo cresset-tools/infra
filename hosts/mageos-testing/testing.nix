@@ -163,9 +163,21 @@ in
   # bougied spawns service processes with a hardcoded PATH=/usr/bin:/bin
   # (crates/bougie-daemon .. provisioners/rabbitmq.rs), and the runtimes'
   # shell launchers need dirname/sed/grep there. envfs materializes
-  # /usr/bin/* on demand, with a coreutils fallback for PATH-cleared
-  # callers — exactly this case.
-  services.envfs.enable = true;
+  # /usr/bin/* on demand — but PATH-cleared callers (exactly this case)
+  # only see envfs's fallback set, which ships just env+sh, so extend it
+  # with the FHS staples the service launchers use.
+  services.envfs = {
+    enable = true;
+    extraFallbackPathCommands = ''
+      for pkg in ${pkgs.coreutils} ${pkgs.gnused} ${pkgs.gnugrep} \
+                 ${pkgs.gawk} ${pkgs.findutils} ${pkgs.procps} \
+                 ${pkgs.gnutar} ${pkgs.gzip} ${pkgs.util-linux}; do
+        for bin in "$pkg"/bin/*; do
+          ln -sf "$bin" "$out/bin/$(basename "$bin")"
+        done
+      done
+    '';
+  };
 
   programs.ssh.knownHosts.github = {
     hostNames = [ "github.com" ];
