@@ -217,8 +217,10 @@ services.redis.servers."".enable = true;        # multi-instance; "" = default 1
   closure; `origin` + `telemetry` still evaluate; both image packages resolve; the two
   DB-password oneshot scripts render correct SQL. (`nix flake check` / full toplevel *build*
   not run — eval is the config check; the image builds are validated separately.)
-- ☐ Magento image entrypoint: real init (s6/tini) so php-fpm precedes nginx; + first-boot
-  seed restore.
+- ☑ Magento image entrypoint: tini (-g) as PID 1; nginx gated on php-fpm accepting
+  on 9000; `wait -n` exits the container if either daemon dies (the podman unit
+  restarts it). First-boot seed restore was superseded by the Deployer release
+  layout — the app tree lives in `releases/`, seeded by `dep deploy`.
 - ☐ Then Phase 4: provision CX32 (`nix run .#deploy -- demo <ip>` with `--extra-files`
   planting the SSH host key), DNS for `repo.`/`demo.bougie.tools`, ACME; restore the
   Magento app-tree + DB seed; provision a sconce service token; re-apply the Mollie test

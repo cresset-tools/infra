@@ -121,14 +121,30 @@ let
     clear_env = no
     catch_workers_output = yes
   '';
-  # NOTE: POC entrypoint (php-fpm & ; exec nginx). Production should use a real
-  # init (s6/tini) so php-fpm is ready before nginx accepts. TODO before go-live.
+  # tini is PID 1 (-g: SIGTERM goes to the whole process group, since bash
+  # doesn't forward signals and php-fpm/nginx are the script's children). nginx
+  # only starts once php-fpm accepts on 9000 — the old `php-fpm & ; exec nginx`
+  # raced on cold start. `wait -n` turns either daemon dying into a container
+  # exit, so the podman unit restarts it instead of serving 502s.
   magentoEntrypoint = pkgs.writeScript "magento-entrypoint" ''
     #!${pkgs.bash}/bin/bash
     set -e
     mkdir -p /tmp/ngx-client /tmp/ngx-proxy /tmp/ngx-fastcgi /tmp/ngx-uwsgi /tmp/ngx-scgi
     ${phpRuntime}/bin/php-fpm -F -y ${magentoFpmConf} &
-    exec ${pkgs.nginx}/bin/nginx -g 'daemon off;' -c ${magentoNginxConf} -p /tmp
+    ready=
+    for _ in $(seq 1 50); do
+      if ${phpRuntime}/bin/php -r 'exit(@fsockopen("127.0.0.1", 9000) ? 0 : 1);'; then
+        ready=1; break
+      fi
+      sleep 0.2
+    done
+    if [ -z "$ready" ]; then
+      echo "php-fpm not accepting on 127.0.0.1:9000 after 10s" >&2
+      exit 1
+    fi
+    ${pkgs.nginx}/bin/nginx -g 'daemon off;' -c ${magentoNginxConf} -p /tmp &
+    wait -n
+    exit 1
   '';
   magentoImage = pkgs.dockerTools.buildLayeredImage {
     name = "magento";
@@ -136,7 +152,7 @@ let
     contents = [ phpRuntime pkgs.nginx pkgs.bash pkgs.coreutils ];
     extraCommands = "mkdir -m 1777 -p tmp";
     config = {
-      Entrypoint = [ "${magentoEntrypoint}" ];
+      Entrypoint = [ "${pkgs.tini}/bin/tini" "-g" "--" "${magentoEntrypoint}" ];
       ExposedPorts = { "8081/tcp" = { }; };
       WorkingDir = "/var/lib/magento/current";
     };

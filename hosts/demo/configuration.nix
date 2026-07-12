@@ -17,13 +17,6 @@
 #
 # Secrets come from sops-nix (../secrets/demo.yaml, decrypted at activation
 # with this box's SSH host key). Nothing secret is in the Nix store or git.
-#
-# TODOs before / at go-live (Phase 4+), deliberately not wired here yet:
-#   - restore the Magento app tree seed into /var/lib/magento/app;
-#   - provision a sconce service token for the Magento module's key calls;
-#   - re-apply the Mollie test key into Magento config under the new crypt key;
-#   - give the magento image a real init (s6/tini) so php-fpm is ready before
-#     nginx accepts (the POC entrypoint races on cold start).
 { config, pkgs, lib, inputs, ... }:
 let
   # Images built by the flake's `packages.<system>` (with the rust-overlay).
