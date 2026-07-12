@@ -78,6 +78,11 @@ let
     exec > >(tee "$LOG") 2>&1
     echo "=== testing mageos/main $NEW (previous: ''${LAST:-none}) $(date -Is) ==="
 
+    # The worktree is disposable — the branch is the source of truth.
+    # bougie sync/pin normalize tracked files (composer.json formatting),
+    # and a dirty tree blocks the rebase on the next run.
+    git reset --hard -q
+
     # Carry the harness branch onto the new upstream commit. A conflict
     # means upstream touched a patched file — stop loudly rather than test
     # a half-patched tree.
@@ -91,7 +96,9 @@ let
     git push origin mageos-testing --force-with-lease -q \
         || echo "warning: could not push mageos-testing to fork"
 
-    bougie php pin 8.4 || true
+    # (php 8.4 pin is committed in the branch's composer.json —
+    # config.platform.php — so no `bougie php pin` here: it rewrites
+    # composer.json formatting and dirties the tree.)
     bougie sync
     # Services may be down after an unattended reboot.
     bougie service up
