@@ -248,13 +248,19 @@ in
               ],
           ],
           'cache' => [
+              // 'redis', not the canonical 'Cm_Cache_Backend_Redis': modulargento's
+              // Symfony cache stack resolves the backend via a name map and silently
+              // fell back to FILE caching for the legacy class name (every page
+              // built var/cache/<prefix>_/ while redis db0/db1 stayed empty).
+              // 'redis' is the map's native key; modulargento PR #36 also maps the
+              // legacy names upstream.
               'frontend' => [
                   'default' => [
-                      'backend' => 'Cm_Cache_Backend_Redis',
+                      'backend' => 'redis',
                       'backend_options' => ['server' => '127.0.0.1', 'database' => '0', 'port' => '6379'],
                   ],
                   'page_cache' => [
-                      'backend' => 'Cm_Cache_Backend_Redis',
+                      'backend' => 'redis',
                       'backend_options' => ['server' => '127.0.0.1', 'database' => '1', 'port' => '6379', 'compress_data' => '0'],
                   ],
               ],
