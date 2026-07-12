@@ -5,9 +5,9 @@ gets packaged for `hosts/demo`. Goal: **minimal, deterministic, easy to upgrade*
 — our own two apps ship as **Nix-built OCI images** (`dockerTools`), the datastores
 run as **native NixOS services**, and a nixpkgs bump upgrades the whole runtime.
 
-> Status: **design + partial local validation.** Nix is on the dev box (Determinate
-> 3.17.1); the PHP runtime layer is already built & verified (below). Not yet wired
-> into the flake.
+> Status: **implemented & live.** Everything below is wired into the flake and
+> serving on `hosts/demo`. Where the design and the as-built config drifted, it's
+> noted inline — `hosts/demo/configuration.nix` is the authority.
 
 ## Decisions (locked)
 
@@ -34,9 +34,9 @@ run as **native NixOS services**, and a nixpkgs bump upgrades the whole runtime.
 ```
       demo.bougie.tools ─┐                         ┌─ repo.bougie.tools
                          ▼                         ▼
-  ┌──────────────  hosts/demo  (Hetzner CX32, x86_64, NixOS) ─────────────────┐
+  ┌──────────────  hosts/demo  (Hetzner CX33, x86_64, NixOS) ─────────────────┐
   │  nginx + security.acme (HTTP-01)   →  TLS + vhost routing                  │
-  │        │  proxy 127.0.0.1:8080            │  proxy 127.0.0.1:8081           │
+  │        │  proxy 127.0.0.1:8081            │  proxy 127.0.0.1:8080           │
   │  ┌── oci-container: magento ──────┐  ┌── oci-container: sconce ─────────┐   │
   │  │ Nix img: php84-fpm + nginx     │  │ Nix img: sconce + git + cacert   │   │
   │  │ + app tree (host bind-mount,   │  │ CAS bind-mount /var/lib/sconce   │   │
@@ -51,6 +51,10 @@ run as **native NixOS services**, and a nixpkgs bump upgrades the whole runtime.
 
 App containers reach the native datastores over the host loopback (run them with
 `--network=host`, or a bridge + `127.0.0.1` published datastore sockets).
+
+A third container was added at go-live: **sconce-ui**, the operator dashboard
+behind `admin.bougie.tools` → `127.0.0.1:8082` (same sconce image, running
+`ui --single-tenant`, gated by HTTP basic auth).
 
 ## Component A — sconce image (settled)
 
@@ -124,11 +128,13 @@ phpRuntime = pkgs.php84.buildEnv {
 `vendor`, production-compiled `generated`, `pub/static`) is **not** a Nix input.
 It's produced once from the proven Phase-2 build:
 `composer install --no-dev` → `setup:di:compile` → `setup:static-content:deploy -f`
-(production mode) → tar. On the box it lives at `/var/lib/magento/app` (host state),
-**bind-mounted** into the container. `app/etc/env.php` (DB creds, crypt key, Redis)
-is rendered at deploy from secrets, not baked. Nightly reset = restore the app-tree
-+ DB seed. This keeps the *runtime* upgradeable via nixpkgs while the *app* is
-versioned data.
+(production mode) → tar. As built, the seed-tarball idea was superseded: the app
+tree is a **Deployer atomic-release tree** under `/var/lib/magento`
+(`current -> releases/N`, each release built on-box by `dep deploy` from the
+bougie-license-demo repo), with the whole tree bind-mounted into the container so
+symlink swaps are honored live. `app/etc/env.php` (DB creds, crypt key, Redis) is
+rendered read-only into `shared/` by sops-nix, not baked. This keeps the *runtime*
+upgradeable via nixpkgs while the *app* is versioned data.
 
 **Seed to carry** (from Phase 2): the app tree above **plus** a MariaDB dump — and
 the dump must include the three modulargento-minimal gaps we added:
@@ -159,25 +165,32 @@ boot.kernel.sysctl."vm.max_map_count" = 262144; # OpenSearch needs a high mmap c
 services.redis.servers."".enable = true;        # multi-instance; "" = default 127.0.0.1:6379
 ```
 
+As built the MariaDB database/user are named `magento` (not
+`bougie_licensing_demo`), and both DB passwords are applied by sops-fed oneshot
+units — `ensureUsers.ensurePermissions` doesn't exist at this pin. See
+`hosts/demo/configuration.nix`.
+
 ## Wiring, secrets, upgrade, reset
 
-- **oci-containers**: `virtualisation.oci-containers.backend = "podman";` two
-  containers with `imageFile = self.packages.x86_64-linux.{sconceImage,magentoImage}`,
+- **oci-containers**: `virtualisation.oci-containers.backend = "podman";` three
+  containers (`sconce`, `sconce-ui`, `magento`) with
+  `imageFile = self.packages.x86_64-linux.{sconceImage,magentoImage}`,
   `extraOptions = [ "--network=host" ]` (reach the loopback datastores),
-  `volumes` for CAS / app-tree / seed, `environmentFiles` for secrets.
-- **nginx/ACME**: two `virtualHosts` (`repo.` → :8080, `demo.` → :8081),
-  `enableACME = true; forceSSL = true;`, hand-set proxy headers
-  (`recommendedProxySettings` is off in this repo).
-- **Secrets**: no framework exists yet. Two paths — (1) repo convention:
-  hand-provisioned `EnvironmentFile`s under `/var/lib/*` loaded at runtime; or
-  (2) introduce **sops-nix** as a new `modules/secrets.nix` (DEMO_PLAN open
-  decision #2). Recommend sops-nix for the demo host: `SCONCE_SECRET_KEY`, the
-  Mollie test key, DB passwords, `env.php` crypt key.
+  `volumes` for CAS / app-tree, `environmentFiles` for secrets.
+- **nginx/ACME**: three `virtualHosts` (`repo.` → :8080, `demo.` → :8081,
+  `admin.` → :8082), `enableACME = true; forceSSL = true;`, proxy headers via
+  `recommendedProxySettings`.
+- **Secrets**: **sops-nix** (chosen over hand-provisioned `EnvironmentFile`s —
+  DEMO_PLAN decision #2): `modules/secrets.nix` declares them,
+  `secrets/demo.yaml` carries them encrypted, and `sops.templates` compose them
+  into the sconce env-files and Magento's `env.php`/`auth.json`.
 - **Upgrade**: bump `flake.lock` → `nix run .#switch -- demo <ip>` rebuilds the two
   images (new php/nginx/openssl/git) + the native datastores; containers restart;
-  rollback via Nix generations. The app tree upgrades separately (a deliberate
-  composer op), as befits data.
+  rollback via Nix generations. The box also auto-upgrades weekly (Sun 05:00 UTC)
+  from `github:cresset-tools/infra#demo`. The app tree upgrades separately (a
+  `dep deploy` release), as befits data.
 - **Reset (nightly)**: restore the app-tree + MariaDB seed; recreate containers.
+  **Not implemented yet** (the open Phase-5 item in DEMO_PLAN.md).
 
 ## Validated so far / open items
 
@@ -221,7 +234,9 @@ services.redis.servers."".enable = true;        # multi-instance; "" = default 1
   on 9000; `wait -n` exits the container if either daemon dies (the podman unit
   restarts it). First-boot seed restore was superseded by the Deployer release
   layout — the app tree lives in `releases/`, seeded by `dep deploy`.
-- ☐ Then Phase 4: provision CX32 (`nix run .#deploy -- demo <ip>` with `--extra-files`
-  planting the SSH host key), DNS for `repo.`/`demo.bougie.tools`, ACME; restore the
-  Magento app-tree + DB seed; provision a sconce service token; re-apply the Mollie test
-  key under the new crypt key; add the box's static IPv6.
+- ☑ Phase 4 shipped and verified live: CX33 provisioned (`nix run .#deploy -- demo <ip>`
+  with `--extra-files` planting the SSH host key); DNS + ACME for
+  `repo.`/`demo.`/`admin.bougie.tools`; static IPv6 out of the routed /64 with AAAA
+  records, reachable externally; the store serving from the Deployer release tree;
+  sconce service token provisioned and issuing licenses; Mollie test key re-applied
+  under the new crypt key and completing orders end-to-end.

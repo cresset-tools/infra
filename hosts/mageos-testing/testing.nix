@@ -169,6 +169,7 @@ in
   services.envfs = {
     enable = true;
     extraFallbackPathCommands = ''
+      mkdir -p "$out/bin"
       for pkg in ${pkgs.coreutils} ${pkgs.gnused} ${pkgs.gnugrep} \
                  ${pkgs.gawk} ${pkgs.findutils} ${pkgs.procps} \
                  ${pkgs.gnutar} ${pkgs.gzip} ${pkgs.util-linux}; do

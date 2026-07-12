@@ -7,14 +7,18 @@ NixOS configurations for every cresset.tools host, behind one flake.
 ```
 flake.nix                        # iterates hosts/*/, exports each as nixosConfigurations.<name>;
                                  # provides .#deploy / .#switch apps that take a host name
+demo-images.nix                  # Nix-built OCI images for the demo host (sconce + Magento runtime)
 hosts/
-  origin/                        # Hetzner CAX11 (ARM) + Cloud Volume —
-                                 # index.bougie.tools + blobs.bougie.tools
-    configuration.nix
+  origin/                        # Hetzner CAX11 (ARM) + Cloud Volume — the bougie/cresset
+    configuration.nix            # web + distribution box (eight vhosts, see Hosts below)
     nginx.nix
     disko.nix
-modules/                         # shared NixOS modules (empty for now; populates as the
-                                 # second host shows up and starts duplicating settings)
+  telemetry/                     # Hetzner CX23 — bougie-collector telemetry ingest
+  demo/                          # Hetzner CX33 — the licensing demo (Magento + sconce)
+  mageos-testing/                # Mage-OS integration-testing worker
+modules/                         # shared NixOS modules (secrets.nix: sops-nix declarations)
+secrets/                         # sops-encrypted per-host secrets (demo.yaml)
+scripts/                         # operator helper scripts
 ```
 
 Add a new host: `mkdir hosts/<name>` + `configuration.nix` + (optional)
@@ -22,8 +26,12 @@ Add a new host: `mkdir hosts/<name>` + `configuration.nix` + (optional)
 
 ## Hosts
 
-- **`origin`** — serves the bougie distribution layer
-  (`index.bougie.tools` + `blobs.bougie.tools`). See
+- **`origin`** — the bougie/cresset web + distribution box: the
+  distribution layer (`index.` / `blobs.` / `releases.bougie.tools`),
+  the static brand sites (`bougie.tools`, with the `/<tool>.sh`
+  installer aliases redirecting into the releases mirror, and
+  `cresset.tools`, plus `www.` redirects for both), and the
+  `modulargento.cresset.tools` Composer repository. See
   [`hosts/origin/`](hosts/origin/) and the bootstrap section below.
 - **`telemetry`** — `telemetry.bougie.tools`, the first-party
   bougie-collector ingest for bougie's opt-in telemetry + diagnose
@@ -34,6 +42,19 @@ Add a new host: `mkdir hosts/<name>` + `configuration.nix` + (optional)
   Privacy invariants: nginx logs are off for the vhost (no IPs on
   disk) and the Cloudflare record must stay **DNS-only** (grey cloud)
   — proxying would terminate TLS at a third party.
+- **`demo`** — the licensing demo (Hetzner CX33, x86): the
+  `demo.bougie.tools` Magento storefront, the `repo.bougie.tools`
+  sconce Composer repo, and the `admin.bougie.tools` operator
+  dashboard. Two Nix-built OCI images (from
+  [`demo-images.nix`](demo-images.nix)) under rootful podman, with the
+  datastores as native NixOS services and secrets via sops-nix. Plan
+  and as-built notes: [`DEMO_PLAN.md`](DEMO_PLAN.md) +
+  [`CONTAINERIZATION.md`](CONTAINERIZATION.md).
+- **`mageos-testing`** — Mage-OS integration-testing worker: runs the
+  mageos-magento2 suite against every new master commit and publishes
+  static HTML reports at `mageos-tests.bougie.tools`. Newest host —
+  the manual post-deploy steps (deploy key, DNS, borg credentials) are
+  listed in [`hosts/mageos-testing/testing.nix`](hosts/mageos-testing/testing.nix).
 
 ## Bootstrap a host (one-time)
 
@@ -168,10 +189,11 @@ nix run .#switch -- origin <hetzner-ipv4>
 Wraps `nixos-rebuild switch --target-host`. No SSH-into-the-box
 required for ordinary changes.
 
-The `origin` host also auto-upgrades weekly (Sunday 03:30 UTC) from
-`github:cresset-tools/infra#origin`, so once you push a change here
-the box catches up on its own within a week. For urgent changes use
-`nix run .#switch`.
+Every host also auto-upgrades weekly from
+`github:cresset-tools/infra#<name>`, staggered across Sunday morning
+(origin 03:30, telemetry 04:00, demo 05:00, mageos-testing 06:00 UTC),
+so once you push a change here the boxes catch up on their own within
+a week. For urgent changes use `nix run .#switch`.
 
 ## Operational notes (origin specifically)
 

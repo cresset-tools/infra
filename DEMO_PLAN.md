@@ -7,13 +7,23 @@ that now access‑gated package from a private **sconce** repo. At least one pro
 is a **Mollie subscription**, exercising the renewal path in
 `cresset/module-bougie-licensing-mollie`.
 
-> Status: **Phase 1 proven locally** (see "Verified" below). Not yet hosted.
+> Status: **live.** Phases 1–4 are done — the demo serves at
+> `demo.bougie.tools` / `repo.bougie.tools` / `admin.bougie.tools` from
+> `hosts/demo` (Hetzner CX33), and real test purchases complete end-to-end on
+> the live box (paid order → license key issued → gated `composer install`).
+> As-built details: `hosts/demo/configuration.nix` +
+> [CONTAINERIZATION.md](CONTAINERIZATION.md). Still open from Phase 5:
+> nightly reset to a clean seed, and a demo banner / buyer instructions on
+> the storefront (the homepage has neither today).
 
 ## Locked decisions
 
-- **Hosting:** one always‑on Hetzner host (**x86, ~CX32 / 8 GB**) added to this
-  flake as `hosts/demo/`, deployed with the existing `nix run .#deploy/.#switch`.
-- **Magento runtime:** Docker Compose via `virtualisation.oci-containers`.
+- **Hosting:** one always‑on Hetzner host (**x86, 8 GB** — a **CX33** as built)
+  added to this flake as `hosts/demo/`, deployed with the existing
+  `nix run .#deploy/.#switch`.
+- **Magento runtime:** `virtualisation.oci-containers` — as built, Nix-built
+  images under rootful podman (no compose), with the datastores as native
+  NixOS services; see [CONTAINERIZATION.md](CONTAINERIZATION.md).
 - **Store base:** **modulargento minimal**
   (`composer create-project modulargento/project-minimal-edition:3.1.0
   --repository-url=https://modulargento.cresset.tools/` — Mage‑OS 3.1.0, PHP 8.4,
@@ -21,10 +31,16 @@ is a **Mollie subscription**, exercising the renewal path in
   Redis optional; RabbitMQ/Varnish not needed.**
 - **Package source:** **sconce mirrors every cresset package from git** — no satis
   for the modules. (Validated, see below.)
-- **Domains:** `demo.bougie.tools` (store) + `repo.bougie.tools` (sconce),
+- **Domains:** `demo.bougie.tools` (store) + `repo.bougie.tools` (sconce) —
+  plus `admin.bougie.tools` (sconce operator dashboard, added at go‑live) —
   Cloudflare DNS‑only, ACME like the other hosts.
 
 ## Architecture
+
+> Original sketch — superseded in two ways as built: the datastores moved out
+> of the compose group to **native NixOS services** (loopback-only), and the
+> box is a CX33 with **postgresql 17**. The accurate diagram is in
+> [CONTAINERIZATION.md](CONTAINERIZATION.md).
 
 ```
         demo.bougie.tools ─┐                    ┌─ repo.bougie.tools
@@ -117,6 +133,11 @@ seed dump + media**, and have the Magento container **restore it on first boot**
 (secrets injected via env, not baked). sconce reuses its own `Dockerfile` +
 `docker-compose.yml`.
 
+> As built, first-boot restore was superseded by a **Deployer atomic-release
+> tree**: the app lives under `/var/lib/magento` (`current -> releases/N`),
+> each release built on-box by `dep deploy` from the bougie-license-demo repo,
+> with `env.php`/`auth.json` rendered read-only into `shared/` by sops-nix.
+
 ## Phases
 
 - **Phase 1 — sconce (DONE, locally proven).** Catalog + editions + gated serving
@@ -124,13 +145,15 @@ seed dump + media**, and have the Magento container **restore it on first boot**
 - **Phase 2 — store locally (via bougie). DONE, locally proven.** minimal + modules,
   wired Bougie + Mollie test, catalog built, full buy→key→install +
   subscription‑renewal flow exercised through real Magento orders. See Verified (Phase 2).
-- **Phase 3 — containerize.** sconce (its image) + a Magento Dockerfile/compose
-  that restores the Phase‑2 seed. Verify standalone.
-- **Phase 4 — host.** `hosts/demo/{configuration,disko}.nix` + `system`
-  (x86_64-linux) + secrets (sops‑nix, new `modules/secrets.nix`); provision CX32;
-  DNS; `nix run .#deploy -- demo <ip>`.
-- **Phase 5 — go‑live.** ACME, run the purchase against the live box, nightly reset
-  to a clean seed, buyer instructions on the storefront.
+- **Phase 3 — containerize. DONE.** Nix-built OCI images instead of
+  Dockerfile/compose — see [CONTAINERIZATION.md](CONTAINERIZATION.md).
+- **Phase 4 — host. DONE, live.** `hosts/demo/{configuration,disko}.nix` +
+  `system` (x86_64-linux) + sops‑nix (`modules/secrets.nix`); CX33 provisioned,
+  DNS + static IPv6, `nix run .#deploy -- demo <ip>`.
+- **Phase 5 — go‑live. Partially done.** ACME live; real test purchases proven
+  against the live box (orders complete → licenses issued → gated install).
+  **Still open:** nightly reset to a clean seed, buyer instructions / demo
+  banner on the storefront.
 
 ## Verified (Phase 1, 2026‑07‑07)
 
@@ -192,12 +215,12 @@ registration/checkout 500s). All added to `~/bougie-licensing-demo/composer.json
 
 ## Open decisions
 
-| # | Decision | Recommendation |
-|---|----------|----------------|
-| 1 | Demo hygiene (public site) | Nightly reset to clean seed; test‑mode Mollie only; "demo" banner |
-| 2 | Secrets in infra | Add sops‑nix (new `modules/secrets.nix`) |
-| 3 | Box size | CX32 (8 GB); cap OpenSearch heap ~1 GB |
-| 4 | Subscription realism | Trigger a Mollie test recurring charge to show the license bound extend |
+| # | Decision | Recommendation | Outcome |
+|---|----------|----------------|---------|
+| 1 | Demo hygiene (public site) | Nightly reset to clean seed; test‑mode Mollie only; "demo" banner | Test‑mode only ✓ (live key empty); nightly reset + banner **still open** |
+| 2 | Secrets in infra | Add sops‑nix (new `modules/secrets.nix`) | **Done** — sops‑nix, `secrets/demo.yaml` |
+| 3 | Box size | CX32 (8 GB); cap OpenSearch heap ~1 GB | **Settled** — CX33 (8 GB), OpenSearch heap 1 GB |
+| 4 | Subscription realism | Trigger a Mollie test recurring charge to show the license bound extend | **Still open** on the live box (proven locally in Phase 2) |
 
 ## Prerequisite on the operator
 
