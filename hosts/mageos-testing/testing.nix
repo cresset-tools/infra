@@ -9,7 +9,7 @@
 # Manual provisioning steps after first deploy:
 #   1. journalctl -u mageos-testing-setup — copy the printed deploy key,
 #      add it to cresset-tools/mageos-magento2 as a write deploy key.
-#   2. Point mageos-tests.bougie.tools at this host (Cloudflare, DNS-only).
+#   2. Point mageos-tests.cresset.tools at this host (Cloudflare, DNS-only).
 #   3. Place /root/borg/ssh + /root/borg/passphrase for the backup job.
 
 let
