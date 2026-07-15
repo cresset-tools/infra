@@ -230,6 +230,13 @@ in
     script = ''
       set -euo pipefail
       mkdir -p $HOME/.ssh $HOME/baseline
+      # The nightly rebases the harness branch onto the new upstream commit,
+      # which creates commits and so needs a committer identity. Without it
+      # the rebase aborts ("empty ident name") the moment mageos/main moves,
+      # and last-run-sha never advances (the report freezes on the last good
+      # run). Set it globally so both the rebase and the baseline commit work.
+      git config --global user.email "testing@bougie.tools"
+      git config --global user.name "mageos-testing"
       if [ ! -f $HOME/.ssh/fork-deploy ]; then
           ssh-keygen -t ed25519 -N "" -C "mageos-testing@bougie.tools" -f $HOME/.ssh/fork-deploy
           echo "=== REGISTER THIS WRITE DEPLOY KEY ON cresset-tools/mageos-magento2 ==="
