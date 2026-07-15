@@ -64,6 +64,7 @@ const COMMAND_KEYS: &[&str] = &[
     "direct_deps", "total_deps",
 ];
 const CRASH_KEYS: &[&str] = &["command", "fingerprint", "frames", "message"];
+const UPDATE_KEYS: &[&str] = &["from_version", "to_version"];
 
 // ---- state ----
 
@@ -163,6 +164,12 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
             message TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_crash_day ON crash_events(received_day);
+        CREATE TABLE IF NOT EXISTS update_events (
+            received_day TEXT NOT NULL, ts TEXT, install_id TEXT, invocation TEXT,
+            version TEXT, build_sha TEXT, os TEXT, arch TEXT, libc TEXT, ci INT,
+            install_method TEXT, from_version TEXT, to_version TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_update_day ON update_events(received_day);
         CREATE TABLE IF NOT EXISTS diagnose_reports (
             id TEXT PRIMARY KEY, received_at INT NOT NULL, body TEXT NOT NULL
         );
@@ -203,7 +210,8 @@ fn rollup_all(db: &Connection) {
     let mut days: Vec<String> = Vec::new();
     if let Ok(mut stmt) = db.prepare(
         "SELECT DISTINCT received_day FROM command_events
-         UNION SELECT DISTINCT received_day FROM crash_events",
+         UNION SELECT DISTINCT received_day FROM crash_events
+         UNION SELECT DISTINCT received_day FROM update_events",
     ) {
         if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
             days.extend(rows.flatten());
@@ -223,7 +231,8 @@ fn rollup_day(db: &Connection, day: &str) -> rusqlite::Result<()> {
         "SELECT count(DISTINCT install_id) FROM command_events WHERE received_day = ?1",
     )?;
     let crashes = count("SELECT count(*) FROM crash_events WHERE received_day = ?1")?;
-    if events == 0 && crashes == 0 {
+    let updates = count("SELECT count(*) FROM update_events WHERE received_day = ?1")?;
+    if events == 0 && crashes == 0 && updates == 0 {
         return Ok(());
     }
     // CI split: ephemeral runners mint a fresh install_id per run, so
@@ -276,6 +285,9 @@ fn rollup_day(db: &Connection, day: &str) -> rusqlite::Result<()> {
         ("ci", "SELECT CASE WHEN ci = 1 THEN 'ci' ELSE 'interactive' END, count(*) FROM command_events WHERE received_day = ?1 GROUP BY 1"),
         ("php", "SELECT php_version, count(*) FROM command_events WHERE received_day = ?1 AND php_version IS NOT NULL GROUP BY 1"),
         ("crash", "SELECT fingerprint || ' ' || command, count(*) FROM crash_events WHERE received_day = ?1 GROUP BY 1"),
+        // Successful self-updates as from → to transitions: reads as a
+        // release-adoption curve when summed over days.
+        ("update", "SELECT from_version || ' → ' || to_version, count(*) FROM update_events WHERE received_day = ?1 GROUP BY 1"),
     ];
     for (dim, sql) in grouped {
         let mut stmt = db.prepare(sql)?;
@@ -391,9 +403,10 @@ fn insert_event(db: &Connection, day: &str, v: &serde_json::Value) -> Option<()>
         return None;
     }
     let event = obj.get("event")?.as_str()?;
-    let (extra_keys, is_command) = match event {
-        "command" => (COMMAND_KEYS, true),
-        "crash" => (CRASH_KEYS, false),
+    let extra_keys = match event {
+        "command" => COMMAND_KEYS,
+        "crash" => CRASH_KEYS,
+        "update" => UPDATE_KEYS,
         _ => return None,
     };
     // Field allowlist: any key outside the contract kills the line.
@@ -422,7 +435,25 @@ fn insert_event(db: &Connection, day: &str, v: &serde_json::Value) -> Option<()>
         .as_str()
         .filter(|s| INSTALL_METHODS.contains(s))?;
 
-    if is_command {
+    // The `update` event (a successful `self update`) carries only the
+    // version transition on top of the envelope. Handled here so the
+    // command/crash split below stays untouched.
+    if event == "update" {
+        let from = obj.get("from_version")?.as_str().filter(|s| version_ok(s))?;
+        let to = obj.get("to_version")?.as_str().filter(|s| version_ok(s))?;
+        db.execute(
+            "INSERT INTO update_events VALUES
+             (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            rusqlite::params![
+                day, ts, install_id, invocation, version, build_sha, os, arch,
+                libc, ci, method, from, to
+            ],
+        )
+        .ok()?;
+        return Some(());
+    }
+
+    if event == "command" {
         let name = obj.get("name")?.as_str().filter(|s| COMMANDS.contains(s))?;
         let duration = obj.get("duration_ms")?.as_u64()?;
         let outcome = obj.get("outcome")?.as_str().filter(|s| OUTCOMES.contains(s))?;
@@ -946,6 +977,10 @@ fn maintain(app: &App) {
         "DELETE FROM crash_events WHERE received_day < date('now', ?1)",
         [format!("-{RAW_RETENTION_DAYS} days")],
     );
+    let _ = db.execute(
+        "DELETE FROM update_events WHERE received_day < date('now', ?1)",
+        [format!("-{RAW_RETENTION_DAYS} days")],
+    );
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let _ = db.execute(
         "DELETE FROM diagnose_reports WHERE received_at < ?1",
@@ -1105,6 +1140,56 @@ mod tests {
         let n: i64 =
             db.query_row("SELECT count(*) FROM command_events", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
+    }
+
+    fn valid_update() -> serde_json::Value {
+        serde_json::json!({
+            "schema": 1, "event": "update", "ts": "2026-07-03T09:00:00Z",
+            "install_id": "unset",
+            "invocation": "00000000-0000-4000-8000-000000000000",
+            "bougie_version": "0.48.0", "build_sha": "0123456ab",
+            "os": "macos", "arch": "aarch64", "libc": "none", "ci": false,
+            "install_method": "installer",
+            "from_version": "0.48.0", "to_version": "0.49.0"
+        })
+    }
+
+    #[test]
+    fn valid_update_event_inserts_and_rolls_up_as_a_transition() {
+        let app = mem_app();
+        let db = app.db.lock().unwrap();
+        assert!(insert_event(&db, "2026-07-03", &valid_update()).is_some());
+        let (from, to): (String, String) = db
+            .query_row("SELECT from_version, to_version FROM update_events", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((from.as_str(), to.as_str()), ("0.48.0", "0.49.0"));
+        // A day with only updates still rolls up, surfacing the from → to
+        // transition as a dashboard dim.
+        rollup_day(&db, "2026-07-03").unwrap();
+        let n: i64 = db
+            .query_row(
+                "SELECT count FROM daily_dim WHERE dim = 'update' AND key = ?1",
+                ["0.48.0 → 0.49.0"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn update_event_rejects_extra_field_and_bad_version() {
+        let app = mem_app();
+        let db = app.db.lock().unwrap();
+        // A key outside UPDATE_KEYS + envelope kills the line.
+        let mut extra = valid_update();
+        extra["name"] = serde_json::json!("sync");
+        assert!(insert_event(&db, "2026-07-03", &extra).is_none());
+        // A non-semver version is rejected.
+        let mut bad = valid_update();
+        bad["to_version"] = serde_json::json!("garbage");
+        assert!(insert_event(&db, "2026-07-03", &bad).is_none());
     }
 
     #[test]

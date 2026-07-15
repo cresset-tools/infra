@@ -283,6 +283,7 @@
     ["extension", "Extensions", "fixed vocabulary; private extensions never appear"],
     ["service",   "Services", "declared dev services"],
     ["crash",     "Crash signatures", "fingerprint + command, grouped"],
+    ["update",    "Self-updates", "successful self update, from → to version"],
   ];
   document.getElementById("lists").innerHTML = lists.map(([dim, title, sub]) => {
     const rows = (dims[dim] || []).slice(0, 12);
