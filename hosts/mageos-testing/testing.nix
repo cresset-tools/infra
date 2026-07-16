@@ -69,8 +69,14 @@ let
     git fetch mageos main --no-tags -q
     NEW=$(git rev-parse mageos/main)
     LAST=$(cat "$STATE/last-run-sha" 2>/dev/null || echo "")
-    if [ "$NEW" = "$LAST" ]; then
-        echo "no new commit on mageos/main ($NEW)"
+    # Run every new upstream commit; also re-run the *current* commit at most
+    # once/day (the daily timer cadence) so the page stays fresh on quiet
+    # upstream days and repeated runs of the same code surface flaky tests
+    # (a test that flips green<->red on identical code is a definitive flake).
+    # last-run-sha's mtime is when the last successful run finished.
+    LASTRUN=$(stat -c %Y "$STATE/last-run-sha" 2>/dev/null || echo 0)
+    if [ "$NEW" = "$LAST" ] && [ $(( $(date +%s) - LASTRUN )) -lt 72000 ]; then
+        echo "no new commit on mageos/main ($NEW) and it ran $(( ($(date +%s) - LASTRUN) / 3600 ))h ago (<20h) — skipping"
         exit 0
     fi
 
