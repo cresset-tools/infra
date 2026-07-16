@@ -47,13 +47,13 @@ let
   # metapackage metadata the additive UI derives from up to date.) No new
   # composer/npm deps — composer.lock / package-lock.json unchanged, so
   # vendorHash + npmDepsHash below stay put — only rev + hash move. (Bump
-  # with scripts/update-mageos-maker.sh.) On top of 437033c: b4d2565
-  # (bougie copy omits the # comment line).
+  # with scripts/update-mageos-maker.sh.) On top of b4d2565: 0ac0998
+  # (register the modulargento 3.2.0 distribution in the version overlay).
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "b4d2565ea99d3d11abe83203ffb569b9efdd217d";
-    hash = "sha256-49SNMQG6QN05PxvRH4ywFJD1kq1QG3xEndLTlK+P3E4=";
+    rev = "0ac0998fdd15f6ae86ca5886cb4ba8a8b5c951ee";
+    hash = "sha256-RM1MKUwVEJcDYicx8tuwyQ4GPwu9uOUKTo8lXT1M+lk=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
