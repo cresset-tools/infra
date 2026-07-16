@@ -73,10 +73,12 @@ let
     # once/day (the daily timer cadence) so the page stays fresh on quiet
     # upstream days and repeated runs of the same code surface flaky tests
     # (a test that flips green<->red on identical code is a definitive flake).
-    # last-run-sha's mtime is when the last successful run finished.
+    # last-run-sha's mtime is when the last successful run finished; skip a
+    # re-run only if the current commit already ran on this UTC day (a fixed
+    # hour window could skip a night when a run lands mid-morning).
     LASTRUN=$(stat -c %Y "$STATE/last-run-sha" 2>/dev/null || echo 0)
-    if [ "$NEW" = "$LAST" ] && [ $(( $(date +%s) - LASTRUN )) -lt 72000 ]; then
-        echo "no new commit on mageos/main ($NEW) and it ran $(( ($(date +%s) - LASTRUN) / 3600 ))h ago (<20h) — skipping"
+    if [ "$NEW" = "$LAST" ] && [ "$(date -u +%Y-%m-%d)" = "$(date -u -d "@$LASTRUN" +%Y-%m-%d)" ]; then
+        echo "no new commit on mageos/main ($NEW) and it already ran today — skipping"
         exit 0
     fi
 
