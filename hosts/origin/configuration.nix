@@ -20,6 +20,12 @@
   # NixOS bootloader for UEFI and works on both ARM and x86.
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
+  # The ESP is only 511M and each generation's kernel+initrd is ~90M, so an
+  # unbounded entry list eventually fills /boot and makes activation fail at
+  # the bootloader step ("No space left on device"). Cap the boot menu at the
+  # 5 most recent generations (older ones stay in the store for `nixos-rebuild
+  # --rollback`, they just drop out of the menu).
+  boot.loader.systemd-boot.configurationLimit = 5;
 
   # Kernel boot output goes to both the VGA console (visible in
   # Hetzner's noVNC view) and ttyAMA0 (the ARM serial port that
