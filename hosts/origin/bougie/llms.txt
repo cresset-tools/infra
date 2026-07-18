@@ -308,13 +308,19 @@ Isolated, globally-installed PHP CLIs. Identifier is `vendor/name[@constraint]`.
 - `inject PACKAGE --with PKG_OR_EXT...` / `uninject PACKAGE --with PKG_OR_EXT...`
 - `list`
 - `dir [PACKAGE]` — tool's dir, or the tools root.
-- `run PACKAGE [--php VER] [--with PKG_OR_EXT]... [--no-project] ARGS...` —
-  one-off run, reusing a matching persistent install or materializing into
-  the cache. By default a surrounding project's PHP version and required
-  extensions are applied to the run (tool requirements win on conflict);
-  `--no-project` ignores the project entirely. No `--` separator needed;
-  everything after `PACKAGE` is forwarded verbatim. **`bgx` is a top-level
-  shortcut for `bougie tool run`** (e.g. `bgx phpstan/phpstan analyse src`).
+- `run PACKAGE [--php VER] [--with PKG_OR_EXT]... [--bin NAME] [--no-project] ARGS...` —
+  one-off run, reusing a matching persistent install (same package,
+  constraint, PHP, and `--with` set) or materializing into the cache. By
+  default a surrounding project's PHP version and required extensions are
+  applied to the run (tool requirements win on conflict); `--no-project`
+  ignores the project entirely. `--bin NAME` picks which of the package's
+  bins to run — needed when it exposes several and none matches its
+  `<name>` segment (e.g. `inchoo/magento-bricklayer` exposes `bricklayer`
+  and `bricklayer-mcp`). bougie's own options, including `--bin`, must come
+  *before* `PACKAGE`; no `--` separator is needed — everything from
+  `PACKAGE` onward is forwarded to the tool verbatim. **`bgx` is a
+  top-level shortcut for `bougie tool run`** (e.g. `bgx phpstan/phpstan
+  analyse src`).
 - `upgrade [PACKAGE] [--all] [--reinstall]`
 
 ### Dev services — `bougie service`
