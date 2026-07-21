@@ -1,3 +1,4 @@
+
 # bougie
 
 > A "uv for PHP": a single static binary that is a Composer-compatible package
@@ -24,8 +25,8 @@ and the common paths.
   has a `--yes`/`-y` or `--dry-run` flag. Always pass one in automation.
 - **No Composer plugins or scripts.** bougie never runs `pre-/post-*` scripts
   or Composer plugins. Behaviors that normally come from plugins
-  (composer/installers paths, Symfony Flex recipes, Laravel discovery) are
-  reimplemented natively. Don't expect plugin side effects.
+  (composer/installers paths, Symfony Flex recipes, Laravel package discovery)
+  are reimplemented natively. Don't expect plugin side effects.
 - **Implicit sync.** Many verbs (`run`, `make`/`start`, `server`, `share`,
   `ext add`) run `bougie sync` first. Pass `--no-sync` to skip when the env
   is known good.
@@ -166,10 +167,12 @@ Run `bougie help <command>` for full flags. Global: `--quiet`, `--verbose`,
 - `bougie stop [NAMES...] [--purge]` — bring the project down: stop declared
   services (or every service in `names`). The shared daemon and other projects'
   tenants stay up. `--purge` destroys tenant data. Unix-only.
-- `bougie make [TASK] [--list] [--dry-run] [--explain] [--no-sync] [--no-builtin] [--recipe NAME] [--print]`
+- `bougie make [TASK] [--list] [--dry-run] [--explain] [--no-sync] [--no-builtin] [--no-team] [--recipe NAME] [--print]`
   — run a named recipe task (freshness-gated). With no task, lists available
-  tasks. `bougie make start` runs the `start` task via `make` — for the full
-  project bring-up lifecycle, prefer the dedicated `bougie start` verb.
+  tasks. `--no-team` ignores team-shared tasks from the manifest, using only
+  the builtin recipe + `bougie.toml`. `bougie make start` runs the `start`
+  task via `make` — for the full project bring-up lifecycle, prefer the
+  dedicated `bougie start` verb.
 
 ### Package management — `bougie add`, `bougie remove`, `bougie lock`, `bougie tree`, `bougie outdated`
 
@@ -225,10 +228,10 @@ Version request grammar: `8.3`, `8.3.12`, `8.3+zts`, constraints like `~8.3`.
 
 ### Node.js — `bougie node`
 
-- `install [REQUESTS...]` — install from nodejs.org (`latest`, `lts`, `20`, `20.11`, `20.11.0`).
-- `uninstall REQUESTS...`
+- `install [REQUESTS...]` — install from nodejs.org (`latest`, `lts`, `20`, `20.11`, `20.11.0`); defaults to `latest`.
+- `uninstall REQUESTS...` — remove an installed Node.js version (exact `20.11.0`).
 - `list` — list installed Node.js versions.
-- `find [REQUEST]` — resolve a request, print version + URL without installing.
+- `find [REQUEST]` — resolve a request and print the version + download URL, without installing.
 - `dir` — print the Node.js installation directory.
 
 ### Extensions — `bougie ext`
