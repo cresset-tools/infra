@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "bougie-relay": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784281460,
+        "narHash": "sha256-g0RSqy7tBJ5vTAqIY6Ga/xydgdtDKcMV3pKeJikn330=",
+        "ref": "refs/heads/main",
+        "rev": "1785f87f58405d949e398a5aaa2d47aedcddebeb",
+        "revCount": 1,
+        "type": "git",
+        "url": "ssh://git@github.com/cresset-tools/bougie-relay"
+      },
+      "original": {
+        "type": "git",
+        "url": "ssh://git@github.com/cresset-tools/bougie-relay"
+      }
+    },
     "determinate": {
       "inputs": {
         "determinate-nixd-aarch64-darwin": "determinate-nixd-aarch64-darwin",
@@ -348,6 +364,7 @@
     },
     "root": {
       "inputs": {
+        "bougie-relay": "bougie-relay",
         "determinate": "determinate",
         "disko": "disko",
         "nixos-anywhere": "nixos-anywhere",

@@ -1,10 +1,11 @@
-# sops-nix recipients for the licensing demo host.
-# Admin keys (edit secrets) + the demo box's pre-generated SSH host key (decrypt at
+# sops-nix recipients for the demo + relay hosts.
+# Admin keys (edit secrets) + each box's pre-generated SSH host key (decrypt at
 # runtime; private key installed via nixos-anywhere --extra-files at provision time).
 keys:
   - &admin_devbox age1xz9atq0879saqq5r8a23374gv4s5sxyyxg738rw0ljhwemahm52q8jndvf
   - &admin_macbook age1j3vprddaxegenp4dwkt7mcmyhxuhpghnn6kljl0535gq2jkgqghs83zlve
   - &host_demo age1un7lute5hqsx7lgj8hrx26xj58pn9jhnz7w3m6huv2l3ttrj7g7qj5fcw0
+  - &host_relay age1wvf6v3dssj7ql78f74mmfs7mnnzpd9fxwendyv08w47uf3slzqqqk9xr0x
 creation_rules:
   - path_regex: secrets/demo(\.ya?ml|/[^/]+)$
     key_groups:
@@ -12,3 +13,9 @@ creation_rules:
           - *admin_devbox
           - *admin_macbook
           - *host_demo
+  - path_regex: secrets/relay(\.ya?ml|/[^/]+)$
+    key_groups:
+      - age:
+          - *admin_devbox
+          - *admin_macbook
+          - *host_relay
