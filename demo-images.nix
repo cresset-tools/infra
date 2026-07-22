@@ -81,6 +81,14 @@ let
         index index.php;
         location / { try_files $uri $uri/ /index.php$is_args$args; }
         location /static/ {
+          # Static assets are version-stamped (/static/version<ts>/…): every
+          # setup:static-content:deploy bumps the version, so the URL changes and
+          # busts the cache. That makes it safe to cache for a year and skip
+          # revalidation entirely — previously these came back with only
+          # ETag/Last-Modified, so browsers did a conditional 304 round-trip per
+          # asset per page view. (Matches Magento's canonical nginx.conf.sample.)
+          expires +1y;
+          add_header Cache-Control "public";
           # Strip the cache-busting version prefix and serve the real file.
           location ~ ^/static/version {
             rewrite ^/static/(version\d*/)?(.*)$ /static/$2 last;
@@ -89,11 +97,20 @@ let
           # (on-demand generation in default/developer mode). `resource=$2` is the
           # path after /static/[version/]. (Canonical Magento nginx.conf.sample;
           # the earlier /static/index.php target didn't exist → redirect-cycle 500.)
+          # NB the rewrite re-routes to the .php location below, so a generated
+          # response does NOT inherit the year-long expiry — only real on-disk
+          # files do.
           if (!-f $request_filename) {
             rewrite ^/static/(version\d*/)?(.*)$ /static.php?resource=$2 last;
           }
         }
-        location /media/ { try_files $uri $uri/ /get.php$is_args$args; }
+        # Media is NOT version-stamped (an image can be replaced at the same URL),
+        # so cache modestly — a week — rather than a year.
+        location /media/ {
+          expires 7d;
+          add_header Cache-Control "public";
+          try_files $uri $uri/ /get.php$is_args$args;
+        }
         location ~ ^/(index|get|static|errors/report|errors/404|errors/503|health_check)\.php$ {
           try_files $uri =404;
           fastcgi_pass 127.0.0.1:9000;
