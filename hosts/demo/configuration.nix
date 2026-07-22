@@ -287,6 +287,13 @@ in
               'config_webservice' => 1,
               'translate' => 1,
               'vertex' => 1,
+              // Hyvä pulls in Magewire, whose EnableCache data patch turns this
+              // cache type on. That patch calls Cache\Manager::setEnabled, which
+              // persists env.php ONLY when a value actually changes — so
+              // pre-enabling it here makes the patch a no-op and keeps env.php
+              // read-only (0440). Without this the patch tries to write the
+              // read-only env.php and setup:db-data:upgrade aborts the deploy.
+              'magewire' => 1,
           ],
           'install' => ['date' => 'Thu, 03 Jul 2026 00:00:00 +0000'],
       ];
