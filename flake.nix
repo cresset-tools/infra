@@ -87,17 +87,24 @@
       apps.${system} = {
         # `nix run .#deploy -- <host> <ip>` from a fresh laptop. Wraps
         # nixos-anywhere with the named host's config.
+        #
+        # `--flake` points at THIS flake by store path (`${self}`), not `.#`, so
+        # the app works from any working directory — `nix run ~/infra#deploy`
+        # from elsewhere used to fail with "not part of a flake" because the `.`
+        # resolved to the caller's cwd. It also guarantees the app and the host
+        # config come from the same evaluation rather than whatever flake happens
+        # to sit in `$PWD`.
         deploy = {
           type = "app";
           program = toString (pkgs.writeShellScript "deploy" ''
             set -euo pipefail
             if [ "$#" -lt 2 ]; then
-              echo "usage: nix run .#deploy -- <host> <ip-or-hostname> [extra-flags...]" >&2
+              echo "usage: nix run ~/infra#deploy -- <host> <ip-or-hostname> [extra-flags...]" >&2
               exit 2
             fi
             host="$1"; target="$2"; shift 2
             exec ${nixos-anywhere.packages.${system}.default}/bin/nixos-anywhere \
-              --flake ".#$host" \
+              --flake "${self}#$host" \
               --target-host "root@$target" \
               --print-build-logs \
               "$@"
@@ -108,18 +115,19 @@
         # Uses nixpkgs's nixos-rebuild rather than the system PATH (which
         # may not have it, e.g. the operator running from Debian). Builds
         # on the target itself so cross-arch concerns (laptop is x86_64,
-        # box is aarch64) don't matter.
+        # box is aarch64) don't matter. `--flake` is the absolute `${self}`
+        # store path for the same reason as `deploy` above — cwd-independent.
         switch = {
           type = "app";
           program = toString (pkgs.writeShellScript "switch" ''
             set -euo pipefail
             if [ "$#" -lt 2 ]; then
-              echo "usage: nix run .#switch -- <host> <ip-or-hostname> [extra-flags...]" >&2
+              echo "usage: nix run ~/infra#switch -- <host> <ip-or-hostname> [extra-flags...]" >&2
               exit 2
             fi
             host="$1"; target="$2"; shift 2
             exec ${pkgs.nixos-rebuild}/bin/nixos-rebuild switch \
-              --flake ".#$host" \
+              --flake "${self}#$host" \
               --target-host "root@$target" \
               --build-host "root@$target" \
               --use-substitutes \
