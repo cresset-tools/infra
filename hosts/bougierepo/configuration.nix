@@ -239,6 +239,10 @@ in
       enableACME = true;
       forceSSL = true;
       extraConfig = "client_max_body_size 256m;";
+      # A human hitting the bare registry root gets the marketing landing; every
+      # real registry path (/{org}/{repo}/…, /api, /oauth, /dist, /p2) stays on
+      # sconce — the exact-match `= /` only catches the apex.
+      locations."= /".return = "302 https://bougie.cloud";
       locations."/".proxyPass = "http://127.0.0.1:8080";
     };
 
