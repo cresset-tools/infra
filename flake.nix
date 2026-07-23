@@ -22,9 +22,20 @@
       url = "github:Mic92/sops-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The (private) relay for `bougie share`, built on hosts/bougie-relay via
+    # rustPlatform.buildRustPackage. `flake = false`: it's a plain Cargo
+    # project, and keeping it a source input (not vendored) leaves the relay
+    # closed. Distributed privately via FlakeHub (see the repo's flakehub-push
+    # workflow), so this + the box fetch it over a FlakeHub token instead of an
+    # SSH deploy key: CI authenticates via GitHub OIDC (id-token), and locally
+    # `determinate-nixd login` provides the token for `nix run .#switch`.
+    bougie-relay = {
+      url = "https://flakehub.com/f/cresset-tools/bougie-relay/*.tar.gz";
+      flake = false;
+    };
   };
 
-  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, rust-overlay, sops-nix }:
+  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, rust-overlay, sops-nix, bougie-relay }:
     let
       # CAX11 is aarch64. The deploy/switch helper apps run on the
       # operator's laptop too, so we expose them on both common arches.

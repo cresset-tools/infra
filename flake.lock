@@ -1,5 +1,20 @@
 {
   "nodes": {
+    "bougie-relay": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784823946,
+        "narHash": "sha256-1UE9WRGrQQQuxDHmgNWY3AFTRoMohFGUtOVEspGeNcY=",
+        "rev": "9d5cab417ea9edf52ccc6ca19887c6c0488ca62c",
+        "revCount": 5,
+        "type": "tarball",
+        "url": "https://api.flakehub.com/f/pinned/cresset-tools/bougie-relay/0.1.5%2Brev-9d5cab417ea9edf52ccc6ca19887c6c0488ca62c/019f8fcc-a417-75c3-af2e-d060492517be/source.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://flakehub.com/f/cresset-tools/bougie-relay/%2A.tar.gz"
+      }
+    },
     "determinate": {
       "inputs": {
         "determinate-nixd-aarch64-darwin": "determinate-nixd-aarch64-darwin",
@@ -348,6 +363,7 @@
     },
     "root": {
       "inputs": {
+        "bougie-relay": "bougie-relay",
         "determinate": "determinate",
         "disko": "disko",
         "nixos-anywhere": "nixos-anywhere",

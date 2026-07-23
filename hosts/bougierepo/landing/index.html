@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bougie Cloud</title>
+<meta name="description" content="Hosted services for the Bougie toolchain — a private Composer registry, instant store sharing, and hosted data snapshots. Adopt one, or all.">
+<link rel="stylesheet" href="/assets/app.css">
+<style>
+  /* landing-only layout; every colour/typeface comes from sconce's app.css */
+  .appbar { padding: 0; }
+  .appbar-in {
+    display: flex; align-items: center; justify-content: space-between;
+    width: 100%; max-width: 74rem; margin: 0 auto; height: 56px; padding: 0 28px;
+  }
+  a.brand:hover { text-decoration: none; }
+  .brandmark svg { width: 15px; height: 15px; }
+  .lwrap { max-width: 74rem; margin: 0 auto; padding: 0 28px; }
+  .lhero {
+    display: grid; grid-template-columns: 1.15fr 1fr; gap: 44px;
+    align-items: center; padding: 74px 0 54px;
+  }
+  @media (max-width: 860px) {
+    .lhero { grid-template-columns: 1fr; gap: 30px; padding: 46px 0 38px; }
+  }
+  .leyebrow {
+    color: var(--accent-fg); font-weight: 600; font-size: 12px;
+    letter-spacing: 0.07em; text-transform: uppercase;
+  }
+  .lhero h1 {
+    font-size: clamp(32px, 4.6vw, 46px); line-height: 1.07;
+    letter-spacing: -0.02em; font-weight: 650; margin: 14px 0 16px; color: var(--text);
+  }
+  .lhero h1 .g { color: var(--accent-fg); }
+  .lede { font-size: 16px; color: var(--text2); margin: 0 0 26px; line-height: 1.6; max-width: 40ch; }
+  .lcta { display: flex; gap: 11px; align-items: center; flex-wrap: wrap; }
+  a.btn { text-decoration: none; }
+  a.btn:hover { text-decoration: none; }
+  .lterm { width: 100%; }
+  .lterm code { white-space: pre; word-break: normal; }
+  .lsec-h {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--muted); margin: 6px 0 14px;
+  }
+  .lgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .lgrid { grid-template-columns: 1fr; } }
+  .lcard {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; box-shadow: 0 1px 2px rgba(20, 23, 28, 0.04);
+  }
+  .lcard h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px; letter-spacing: -0.01em; }
+  .lcard p { font-size: 13px; color: var(--text2); margin: 0; line-height: 1.55; }
+  .lnote { margin: 30px 0 0; font-size: 13.5px; color: var(--text2); }
+  .lfoot {
+    border-top: 1px solid var(--border); margin-top: 46px; padding: 22px 0 52px;
+    color: var(--muted); font-size: 12.5px; display: flex;
+    justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+</style>
+</head>
+<body>
+  <header class="appbar">
+    <div class="appbar-in">
+      <a class="brand" href="/">
+        <span class="brandmark">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 3c3.3 3.9 5 6.1 5 9.5a5 5 0 1 1-10 0c0-2.2 1-3.8 2.4-5.4.4 1 .2 2.2 1 3 .9-1.5.1-3.8 1.6-7.1z" fill="#fff"/>
+          </svg>
+        </span>
+        Bougie&nbsp;Cloud
+      </a>
+      <nav class="appnav">
+        <a href="https://bougie.tools">Tools</a>
+        <a class="btn primary" href="https://app.bougie.cloud">Sign in</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="lwrap">
+    <section class="lhero">
+      <div>
+        <div class="leyebrow">Hosted, à la carte</div>
+        <h1>The hosted side of the <span class="g">bougie</span> toolchain.</h1>
+        <p class="lede">A private Composer registry, instant store sharing, and hosted data snapshots — run by us, so your team doesn't have to. Adopt one service, or all of them.</p>
+        <div class="lcta">
+          <a class="btn primary" href="https://app.bougie.cloud">Get started</a>
+          <a class="btn" href="https://bougie.tools">Open-source tools</a>
+        </div>
+      </div>
+      <div class="term lterm">
+        <div class="ln"><span class="pr">$</span><code><span class="cmd">bougie login</span> bougie.cloud</code></div>
+        <div class="ln"><span class="pr">→</span><code>open <span class="url">https://app.bougie.cloud/device</span></code></div>
+        <div class="ln"><span class="pr"> </span><code>enter code  <span class="tok">BXKD-72QF</span></code></div>
+        <div class="ln"><span class="pr">✓</span><code>logged in to <span class="url">bougie.cloud</span></code></div>
+      </div>
+    </section>
+
+    <div class="lsec-h">Services</div>
+    <section class="lgrid">
+      <div class="lcard">
+        <span class="badge violet">Repo</span>
+        <h3>Bougie Repo</h3>
+        <p>A private Composer registry with org access, tokens, and package governance — your team's single package front door.</p>
+      </div>
+      <div class="lcard">
+        <span class="badge blue">Share</span>
+        <h3>Bougie Share</h3>
+        <p>Put your locally-running store on a public URL in one command — for a client, a reviewer, or QA. No deploy.</p>
+      </div>
+      <div class="lcard">
+        <span class="badge amber">Data</span>
+        <h3>Bougie Data</h3>
+        <p>Hosted, anonymized production snapshots your team can pull on demand — the dataset you can't easily rebuild.</p>
+      </div>
+    </section>
+
+    <p class="lnote">Already using the CLI? Run <code>bougie login bougie.cloud</code> and you're connected.</p>
+
+    <footer class="lfoot">
+      <span>Bougie Cloud is operated by Cresset.</span>
+      <a href="https://bougie.tools">bougie.tools →</a>
+    </footer>
+  </div>
+</body>
+</html>
