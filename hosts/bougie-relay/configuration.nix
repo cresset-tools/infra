@@ -111,9 +111,17 @@ in
   sops.defaultSopsFile = ../../secrets/relay.yaml;
   sops.age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
   sops.secrets."cloudflare_dns_token" = { };
+  # The shared secret the relay presents to sconce's /oauth/introspect — must
+  # equal bougierepo's SCONCE_INTROSPECT_SECRET (the same value lives in both
+  # secrets/relay.yaml and secrets/bougierepo.yaml).
+  sops.secrets."introspect_secret" = { };
   # The lego-style env file the ACME DNS-01 (Cloudflare) provider reads.
   sops.templates."acme-cloudflare.env".content =
     "CF_DNS_API_TOKEN=${config.sops.placeholder."cloudflare_dns_token"}\n";
+  # The relay's own secret env-file (loaded by the service below via
+  # EnvironmentFile, so the secret never lands in the Nix store).
+  sops.templates."relay.env".content =
+    "BOUGIE_RELAY_INTROSPECT_SECRET=${config.sops.placeholder."introspect_secret"}\n";
 
   # ---- Wildcard TLS via ACME DNS-01 (Cloudflare) ----
   # HTTP-01 can't issue wildcards, so this is the fleet's only DNS-01 cert.
@@ -144,6 +152,8 @@ in
       DynamicUser = true;
       # Read the wildcard key (mode 640, group acme-relay).
       SupplementaryGroups = [ "acme-relay" ];
+      # Secret env-file (sops): BOUGIE_RELAY_INTROSPECT_SECRET.
+      EnvironmentFile = [ config.sops.templates."relay.env".path ];
       Environment = [
         "BOUGIE_RELAY_DOMAIN=bougie.show"
         # Public HTTPS: dual-stack so viewers reach it over v4 or v6.
@@ -152,10 +162,12 @@ in
         "BOUGIE_RELAY_TUNNEL_ADDR=0.0.0.0:${toString tunnelPort}"
         "BOUGIE_RELAY_CERT=${certDir}/fullchain.pem"
         "BOUGIE_RELAY_KEY=${certDir}/key.pem"
-        # Interim: no production sconce to introspect against yet. Only the
-        # operator can reach the tunnel port (firewall above), so share
-        # *creation* is still gated; viewers are anonymous by design.
-        "BOUGIE_RELAY_DEV_ALLOW_ANONYMOUS=1"
+        # Share *creation* now requires a valid `bougie login` token: the relay
+        # introspects it against the production identity at bougie.cloud (the
+        # shared Bougie Cloud account — sconce's /oauth/introspect; the secret
+        # comes from EnvironmentFile above). The tunnel firewall stays as a
+        # second layer.
+        "BOUGIE_RELAY_SCONCE_URL=https://bougie.cloud"
         "RUST_LOG=info"
       ];
       Restart = "always";
