@@ -205,9 +205,10 @@ in
       volumes = [ "/var/lib/sconce/cas:/var/lib/sconce/cas" ];
       environmentFiles = [ config.sops.templates."sconce-env".path ];
       # Identity/console origin (not secret): the UI's self-links + the
-      # device-flow verification URL resolve to bougie.cloud, while --base-url
-      # keeps registry/dist URLs on bougierepo.com.
-      environment.SCONCE_UI_BASE_URL = "https://bougie.cloud";
+      # device-flow verification URL resolve to app.bougie.cloud (the console
+      # subdomain; the bougie.cloud apex is the marketing landing), while
+      # --base-url keeps registry/dist URLs on bougierepo.com.
+      environment.SCONCE_UI_BASE_URL = "https://app.bougie.cloud";
     };
   };
 
@@ -241,11 +242,18 @@ in
       locations."/".proxyPass = "http://127.0.0.1:8080";
     };
 
-    # The identity / console (bougie.cloud). OAuth API (device, device/token,
-    # introspect — what `bougie login` + the relay hit) is on the wire server
-    # :8080; the device-approval page, dashboard, login, and assets are on the
-    # UI :8081. Same sconce process, different listeners.
+    # Apex bougie.cloud = the marketing landing (static, served from ./landing).
     virtualHosts."bougie.cloud" = {
+      enableACME = true;
+      forceSSL = true;
+      root = ./landing;
+    };
+
+    # The console (app.bougie.cloud): OAuth API (device, device/token,
+    # introspect — what `bougie login` + the relay hit) on the wire server
+    # :8080; the device-approval page, dashboard, login, and assets on the UI
+    # :8081. Same sconce process, different listeners.
+    virtualHosts."app.bougie.cloud" = {
       enableACME = true;
       forceSSL = true;
       locations."/oauth/".proxyPass = "http://127.0.0.1:8080";

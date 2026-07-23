@@ -163,11 +163,11 @@ in
         "BOUGIE_RELAY_CERT=${certDir}/fullchain.pem"
         "BOUGIE_RELAY_KEY=${certDir}/key.pem"
         # Share *creation* now requires a valid `bougie login` token: the relay
-        # introspects it against the production identity at bougie.cloud (the
-        # shared Bougie Cloud account — sconce's /oauth/introspect; the secret
-        # comes from EnvironmentFile above). The tunnel firewall stays as a
-        # second layer.
-        "BOUGIE_RELAY_SCONCE_URL=https://bougie.cloud"
+        # introspects it against the production identity at app.bougie.cloud (the
+        # Bougie Cloud console — sconce's /oauth/introspect; the secret comes
+        # from EnvironmentFile above). The tunnel firewall stays as a second
+        # layer.
+        "BOUGIE_RELAY_SCONCE_URL=https://app.bougie.cloud"
         "RUST_LOG=info"
       ];
       Restart = "always";
