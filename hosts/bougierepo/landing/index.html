@@ -5,86 +5,120 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bougie Cloud</title>
 <meta name="description" content="Hosted services for the Bougie toolchain — a private Composer registry, instant store sharing, and hosted data snapshots. Adopt one, or all.">
+<link rel="stylesheet" href="/assets/app.css">
 <style>
-  :root {
-    --bg: #0d0e12; --panel: #16181f; --border: #262932;
-    --text: #e7e9ee; --muted: #9aa0ad; --flame: #f6a623; --flame-2: #ff7a45;
+  /* landing-only layout; every colour/typeface comes from sconce's app.css */
+  .appbar { padding: 0; }
+  .appbar-in {
+    display: flex; align-items: center; justify-content: space-between;
+    width: 100%; max-width: 74rem; margin: 0 auto; height: 56px; padding: 0 28px;
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; }
-  body {
-    background: radial-gradient(1200px 600px at 50% -12%, #1b1510 0%, var(--bg) 55%) no-repeat, var(--bg);
-    color: var(--text);
-    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
-    -webkit-font-smoothing: antialiased; min-height: 100vh;
+  a.brand:hover { text-decoration: none; }
+  .brandmark svg { width: 15px; height: 15px; }
+  .lwrap { max-width: 74rem; margin: 0 auto; padding: 0 28px; }
+  .lhero {
+    display: grid; grid-template-columns: 1.15fr 1fr; gap: 44px;
+    align-items: center; padding: 74px 0 54px;
   }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
-  header { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.02em; font-size: 18px; }
-  .brand .flame { font-size: 20px; filter: drop-shadow(0 0 8px rgba(246,166,35,.6)); }
-  .signin { text-decoration: none; font-weight: 600; font-size: 14px; padding: 9px 16px; border-radius: 8px;
-    border: 1px solid var(--border); background: var(--panel); color: var(--text); transition: border-color .15s, background .15s; }
-  .signin:hover { border-color: var(--flame); background: #1b1d25; }
-  .hero { padding: 72px 0 40px; }
-  .eyebrow { color: var(--flame); font-weight: 600; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; }
-  h1 { font-size: clamp(34px, 6vw, 56px); line-height: 1.05; letter-spacing: -.03em; margin: 14px 0 18px; }
-  h1 .grad { background: linear-gradient(90deg, var(--flame), var(--flame-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .lede { color: var(--muted); font-size: clamp(17px, 2.4vw, 20px); max-width: 620px; margin: 0 0 30px; }
-  .cta { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-weight: 600;
-    padding: 12px 22px; border-radius: 10px; color: #1a1206;
-    background: linear-gradient(90deg, var(--flame), var(--flame-2)); box-shadow: 0 6px 24px rgba(246,166,35,.25); }
-  .cta:hover { filter: brightness(1.05); }
-  .services { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 26px 0 8px; }
-  @media (max-width: 720px) { .services { grid-template-columns: 1fr; } }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
-  .card .tag { color: var(--flame); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
-  .card h3 { margin: 4px 0 6px; font-size: 17px; letter-spacing: -.01em; }
-  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
-  .note { color: var(--muted); font-size: 14px; padding: 30px 0 0; }
-  .note code { background: #0a0b0e; border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; color: var(--text); font-size: 13px; }
-  footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); margin-top: 56px;
-    padding: 22px 0 40px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-  footer a { color: var(--muted); text-decoration: none; }
-  footer a:hover { color: var(--text); }
+  @media (max-width: 860px) {
+    .lhero { grid-template-columns: 1fr; gap: 30px; padding: 46px 0 38px; }
+  }
+  .leyebrow {
+    color: var(--accent-fg); font-weight: 600; font-size: 12px;
+    letter-spacing: 0.07em; text-transform: uppercase;
+  }
+  .lhero h1 {
+    font-size: clamp(32px, 4.6vw, 46px); line-height: 1.07;
+    letter-spacing: -0.02em; font-weight: 650; margin: 14px 0 16px; color: var(--text);
+  }
+  .lhero h1 .g { color: var(--accent-fg); }
+  .lede { font-size: 16px; color: var(--text2); margin: 0 0 26px; line-height: 1.6; max-width: 40ch; }
+  .lcta { display: flex; gap: 11px; align-items: center; flex-wrap: wrap; }
+  a.btn { text-decoration: none; }
+  a.btn:hover { text-decoration: none; }
+  .lterm { width: 100%; }
+  .lterm code { white-space: pre; word-break: normal; }
+  .lsec-h {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--muted); margin: 6px 0 14px;
+  }
+  .lgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .lgrid { grid-template-columns: 1fr; } }
+  .lcard {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; box-shadow: 0 1px 2px rgba(20, 23, 28, 0.04);
+  }
+  .lcard h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px; letter-spacing: -0.01em; }
+  .lcard p { font-size: 13px; color: var(--text2); margin: 0; line-height: 1.55; }
+  .lnote { margin: 30px 0 0; font-size: 13.5px; color: var(--text2); }
+  .lfoot {
+    border-top: 1px solid var(--border); margin-top: 46px; padding: 22px 0 52px;
+    color: var(--muted); font-size: 12.5px; display: flex;
+    justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <div class="brand"><span class="flame">🔥</span> Bougie&nbsp;Cloud</div>
-      <a class="signin" href="https://app.bougie.cloud">Sign in</a>
-    </header>
+  <header class="appbar">
+    <div class="appbar-in">
+      <a class="brand" href="/">
+        <span class="brandmark">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 3c3.3 3.9 5 6.1 5 9.5a5 5 0 1 1-10 0c0-2.2 1-3.8 2.4-5.4.4 1 .2 2.2 1 3 .9-1.5.1-3.8 1.6-7.1z" fill="#fff"/>
+          </svg>
+        </span>
+        Bougie&nbsp;Cloud
+      </a>
+      <nav class="appnav">
+        <a href="https://bougie.tools">Tools</a>
+        <a class="btn primary" href="https://app.bougie.cloud">Sign in</a>
+      </nav>
+    </div>
+  </header>
 
-    <section class="hero">
-      <div class="eyebrow">Hosted, à la carte</div>
-      <h1>The hosted side of the <span class="grad">bougie</span> toolchain.</h1>
-      <p class="lede">A private Composer registry, instant store sharing, and hosted data snapshots — run by us, so your team doesn't have to. Adopt one service, or all of them.</p>
-      <a class="cta" href="https://app.bougie.cloud">Get started →</a>
+  <div class="lwrap">
+    <section class="lhero">
+      <div>
+        <div class="leyebrow">Hosted, à la carte</div>
+        <h1>The hosted side of the <span class="g">bougie</span> toolchain.</h1>
+        <p class="lede">A private Composer registry, instant store sharing, and hosted data snapshots — run by us, so your team doesn't have to. Adopt one service, or all of them.</p>
+        <div class="lcta">
+          <a class="btn primary" href="https://app.bougie.cloud">Get started</a>
+          <a class="btn" href="https://bougie.tools">Open-source tools</a>
+        </div>
+      </div>
+      <div class="term lterm">
+        <div class="ln"><span class="pr">$</span><code><span class="cmd">bougie login</span> bougie.cloud</code></div>
+        <div class="ln"><span class="pr">→</span><code>open <span class="url">https://app.bougie.cloud/device</span></code></div>
+        <div class="ln"><span class="pr"> </span><code>enter code  <span class="tok">BXKD-72QF</span></code></div>
+        <div class="ln"><span class="pr">✓</span><code>logged in to <span class="url">bougie.cloud</span></code></div>
+      </div>
     </section>
 
-    <section class="services">
-      <div class="card">
-        <div class="tag">REPO</div>
+    <div class="lsec-h">Services</div>
+    <section class="lgrid">
+      <div class="lcard">
+        <span class="badge violet">Repo</span>
         <h3>Bougie Repo</h3>
         <p>A private Composer registry with org access, tokens, and package governance — your team's single package front door.</p>
       </div>
-      <div class="card">
-        <div class="tag">SHARE</div>
+      <div class="lcard">
+        <span class="badge blue">Share</span>
         <h3>Bougie Share</h3>
         <p>Put your locally-running store on a public URL in one command — for a client, a reviewer, or QA. No deploy.</p>
       </div>
-      <div class="card">
-        <div class="tag">DATA</div>
+      <div class="lcard">
+        <span class="badge amber">Data</span>
         <h3>Bougie Data</h3>
         <p>Hosted, anonymized production snapshots your team can pull on demand — the dataset you can't easily rebuild.</p>
       </div>
     </section>
 
-    <p class="note">Already using the CLI? <code>bougie login bougie.cloud</code> and you're connected.</p>
+    <p class="lnote">Already using the CLI? Run <code>bougie login bougie.cloud</code> and you're connected.</p>
 
-    <footer>
+    <footer class="lfoot">
       <span>Bougie Cloud is operated by Cresset.</span>
-      <span><a href="https://bougie.tools">Open-source tools →</a></span>
+      <a href="https://bougie.tools">bougie.tools →</a>
     </footer>
   </div>
 </body>
