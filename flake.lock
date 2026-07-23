@@ -3,17 +3,16 @@
     "bougie-relay": {
       "flake": false,
       "locked": {
-        "lastModified": 1784281460,
-        "narHash": "sha256-g0RSqy7tBJ5vTAqIY6Ga/xydgdtDKcMV3pKeJikn330=",
-        "ref": "refs/heads/main",
-        "rev": "1785f87f58405d949e398a5aaa2d47aedcddebeb",
-        "revCount": 1,
-        "type": "git",
-        "url": "ssh://git@github.com/cresset-tools/bougie-relay"
+        "lastModified": 1784823946,
+        "narHash": "sha256-1UE9WRGrQQQuxDHmgNWY3AFTRoMohFGUtOVEspGeNcY=",
+        "rev": "9d5cab417ea9edf52ccc6ca19887c6c0488ca62c",
+        "revCount": 5,
+        "type": "tarball",
+        "url": "https://api.flakehub.com/f/pinned/cresset-tools/bougie-relay/0.1.5%2Brev-9d5cab417ea9edf52ccc6ca19887c6c0488ca62c/019f8fcc-a417-75c3-af2e-d060492517be/source.tar.gz"
       },
       "original": {
-        "type": "git",
-        "url": "ssh://git@github.com/cresset-tools/bougie-relay"
+        "type": "tarball",
+        "url": "https://flakehub.com/f/cresset-tools/bougie-relay/%2A.tar.gz"
       }
     },
     "determinate": {

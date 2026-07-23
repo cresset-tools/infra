@@ -25,10 +25,12 @@
     # The (private) relay for `bougie share`, built on hosts/bougie-relay via
     # rustPlatform.buildRustPackage. `flake = false`: it's a plain Cargo
     # project, and keeping it a source input (not vendored) leaves the relay
-    # closed. Fetched over SSH, so `nix run .#deploy/.#switch` uses the
-    # operator's key; the box needs its own read token only for autoUpgrade.
+    # closed. Distributed privately via FlakeHub (see the repo's flakehub-push
+    # workflow), so this + the box fetch it over a FlakeHub token instead of an
+    # SSH deploy key: CI authenticates via GitHub OIDC (id-token), and locally
+    # `determinate-nixd login` provides the token for `nix run .#switch`.
     bougie-relay = {
-      url = "git+ssh://git@github.com/cresset-tools/bougie-relay";
+      url = "https://flakehub.com/f/cresset-tools/bougie-relay/*.tar.gz";
       flake = false;
     };
   };
