@@ -195,10 +195,12 @@ in
   };
 
   # ---- Unattended upgrades ----
-  # DISABLED for now: the relay is built from a PRIVATE flake input, so an
-  # autoUpgrade that pulls the public infra repo would also need this box to
-  # have READ access to cresset-tools/bougie-relay (a deploy key wired into the
-  # box's nix `access-tokens`). Until that's set up, update by hand:
+  # DISABLED for now: the relay is built from a PRIVATE flake input
+  # (cresset-tools/bougie-relay, distributed via FlakeHub), so an autoUpgrade
+  # that refetches infra would need this box authenticated to FlakeHub — a
+  # FlakeHub token wired into nix's netrc (e.g. a sops-templated netrc, or
+  # `determinate-nixd login token` at provision time). Until that's set up,
+  # update by hand (uses the operator's own `determinate-nixd login`):
   #   nix run .#switch -- bougie-relay <ip>
   system.autoUpgrade = {
     enable = false;
