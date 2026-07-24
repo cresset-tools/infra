@@ -27,6 +27,7 @@ in
 {
   imports = [
     inputs.sops-nix.nixosModules.sops
+    ../../modules/ci-deploy-key.nix
   ];
 
   # ---- Bootloader ----

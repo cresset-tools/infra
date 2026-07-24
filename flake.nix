@@ -33,9 +33,16 @@
       url = "https://flakehub.com/f/cresset-tools/bougie-relay/*.tar.gz";
       flake = false;
     };
+    # Push-based CD: .github/workflows/deploy.yml builds each host on the runner
+    # and activates it over SSH with deploy-rs (magic rollback). Replaces the
+    # per-box pull `system.autoUpgrade`.
+    deploy-rs = {
+      url = "github:serokell/deploy-rs";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, rust-overlay, sops-nix, bougie-relay }:
+  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, rust-overlay, sops-nix, bougie-relay, deploy-rs }:
     let
       # CAX11 is aarch64. The deploy/switch helper apps run on the
       # operator's laptop too, so we expose them on both common arches.
@@ -86,6 +93,35 @@
         };
     in {
       nixosConfigurations = nixpkgs.lib.genAttrs hostNames mkHost;
+
+      # ---- Push-based CD (deploy-rs) ----
+      # `.github/workflows/deploy.yml` runs `deploy .#<host>` on merge to main:
+      # build the closure on the runner (FlakeHub OIDC covers the private
+      # bougie-relay input), copy it, and activate over SSH with magic rollback
+      # (reverts if the box goes unreachable). This replaces per-box pull
+      # `system.autoUpgrade`, so no host needs a FlakeHub token — the runner
+      # holds the auth and hands each box a finished closure.
+      #
+      # Only the persistent x86_64 production boxes are wired. demo (heavy
+      # Nix-built OCI images), origin (aarch64), and mageos-testing (throwaway)
+      # still deploy by hand via `nix run .#switch`.
+      deploy = {
+        sshUser = "root";
+        magicRollback = true;
+        autoRollback = true;
+        nodes =
+          let
+            node = hostname: name: {
+              inherit hostname;
+              profiles.system.path =
+                deploy-rs.lib.x86_64-linux.activate.nixos self.nixosConfigurations.${name};
+            };
+          in {
+            bougie-relay = node "2.28.9.32" "bougie-relay"; # *.bougie.show apex has no A record
+            bougierepo = node "bougierepo.com" "bougierepo";
+            telemetry = node "telemetry.bougie.tools" "telemetry";
+          };
+      };
 
       # Nix-built OCI images for the demo host (built here, loaded via
       # oci-containers imageFile). Also `nix build .#sconceImage` to inspect.
@@ -144,6 +180,14 @@
               --use-substitutes \
               "$@"
           '');
+        };
+
+        # The pinned deploy-rs CLI for the CD workflow (deploy.yml). Distinct
+        # from `.#deploy` (nixos-anywhere, first-time provisioning) and `.#switch`
+        # (build-on-target); this one builds on the runner and pushes closures.
+        deploy-rs = {
+          type = "app";
+          program = "${deploy-rs.packages.${system}.default}/bin/deploy";
         };
       };
     };

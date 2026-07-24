@@ -1,0 +1,59 @@
+# One-shot provisioning for the CD deploy key (used by deploy.yml).
+#
+# Generates the deploy-rs SSH keypair ON THE RUNNER, writes the PRIVATE half
+# straight into the `production` environment's DEPLOY_SSH_KEY secret, and prints
+# only the PUBLIC half to the run summary. The private key never leaves GitHub:
+# it exists only on the ephemeral runner (shredded at the end) and as the
+# encrypted secret. No operator machine ever holds it.
+#
+# Prerequisite: a fine-grained PAT with "Secrets: write" on this repo, stored as
+# the CD_PROVISION_TOKEN secret. Add it via the GitHub UI (Settings → Secrets)
+# so the PAT itself never touches a laptop either; the default GITHUB_TOKEN
+# cannot manage secrets. You can delete the PAT right after a successful run —
+# provisioning is one-shot. Run from the Actions tab (workflow_dispatch).
+#
+# After a run: copy the public key from the summary into modules/ci-deploy-key.nix,
+# bootstrap the boxes from that branch, then merge (see the CD runbook).
+name: provision-cd-key
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Generate keypair (ephemeral runner only)
+        run: |
+          umask 077
+          ssh-keygen -t ed25519 -N '' -C 'infra CD (deploy-rs)' -f "$RUNNER_TEMP/cd_key"
+
+      - name: Store private half as production/DEPLOY_SSH_KEY
+        env:
+          GH_TOKEN: ${{ secrets.CD_PROVISION_TOKEN }}
+        run: |
+          gh secret set DEPLOY_SSH_KEY \
+            --env production \
+            --repo "$GITHUB_REPOSITORY" \
+            --body-file "$RUNNER_TEMP/cd_key"
+
+      - name: Publish the public half
+        run: |
+          {
+            echo '### CD deploy public key'
+            echo
+            echo 'Put this in `modules/ci-deploy-key.nix` (replace the placeholder),'
+            echo 'bootstrap the boxes from that branch, then merge:'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/cd_key.pub"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Scrub key material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/cd_key" "$RUNNER_TEMP/cd_key.pub" || true

@@ -30,6 +30,7 @@ in
 {
   imports = [
     ./backup.nix
+    ../../modules/ci-deploy-key.nix
   ];
 
   # ---- Bootloader ----

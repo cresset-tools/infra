@@ -1,0 +1,94 @@
+# Push-based CD. On merge to main, build each production host's closure on the
+# runner and activate it over SSH with deploy-rs (magic rollback). Replaces the
+# per-box pull `system.autoUpgrade`: the runner holds FlakeHub auth (OIDC) and
+# hands each box a finished closure, so no host needs a FlakeHub token.
+#
+# Enable (one-time):
+#   1. Run the `provision-cd-key` workflow — it generates the keypair in a
+#      runner, writes the private half to the production/DEPLOY_SSH_KEY secret
+#      (never leaves GitHub), and prints the public half. Put that public key in
+#      modules/ci-deploy-key.nix.
+#   2. Plant the public half by deploying each host once by hand from that branch
+#      (`nix run .#switch -- <host> <addr>`) — CI can't install its own key.
+#   3. Configure the `production` Environment's protection rules.
+# Until DEPLOY_SSH_KEY is set the job is a green no-op (see the gate step).
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "hosts/**"
+      - "modules/**"
+      - "demo-images.nix"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "Deploy a single wired host (blank = all)"
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # FlakeHub OIDC — fetch the private bougie-relay input
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [bougie-relay, bougierepo, telemetry]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gate (key present + host selected)
+        id: gate
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          ONLY: ${{ github.event.inputs.host }}
+        run: |
+          go=true
+          if [ -z "$KEY" ]; then
+            echo "::notice::DEPLOY_SSH_KEY not set — skipping (bootstrap pending)"
+            go=false
+          fi
+          if [ -n "$ONLY" ] && [ "$ONLY" != "${{ matrix.host }}" ]; then
+            go=false
+          fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+
+      - name: Install Nix
+        if: steps.gate.outputs.go == 'true'
+        uses: DeterminateSystems/determinate-nix-action@v3
+        with:
+          extra-conf: |
+            extra-substituters = https://deploy-rs.cachix.org
+            extra-trusted-public-keys = deploy-rs.cachix.org-1:xfNobmiwF/vzvK1gpfediPwpdIP0rpDV2rYqx40zdSI=
+
+      - name: Load deploy key into ssh-agent
+        if: steps.gate.outputs.go == 'true'
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Deploy ${{ matrix.host }}
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/id_ed25519
+          nix run .#deploy-rs -- \
+            --skip-checks \
+            --ssh-opts "-o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=accept-new" \
+            ".#${{ matrix.host }}"
