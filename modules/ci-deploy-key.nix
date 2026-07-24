@@ -15,9 +15,8 @@
 { ... }:
 {
   users.users.root.openssh.authorizedKeys.keys = [
-    # PLACEHOLDER — not a real key. Replace with the public half emitted by the
-    # provision-cd-key workflow, then bootstrap the boxes from that branch. Do
-    # NOT bootstrap while this stand-in is here (sshd ignores it anyway).
-    "ssh-ed25519 AAAA_PROVISION_VIA_provision-cd-key_WORKFLOW infra CD (deploy-rs)"
+    # Provisioned by .github/workflows/provision-cd-key.yml (2026-07-24). The
+    # private half lives only in the production/DEPLOY_SSH_KEY env secret.
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKxESQhIZRhl6NEucrPX6YJfnQdppVEwLDsj95X3Ti0i infra CD (deploy-rs)"
   ];
 }
