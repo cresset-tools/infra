@@ -191,5 +191,12 @@
           program = "${deploy-rs.packages.${system}.default}/bin/deploy";
         };
       };
+
+      # deploy-rs must also run on the arm64 CI runner (origin builds there);
+      # the operator apps (deploy/switch) stay x86-only.
+      apps.aarch64-linux.deploy-rs = {
+        type = "app";
+        program = "${deploy-rs.packages.aarch64-linux.default}/bin/deploy";
+      };
     };
 }
