@@ -39,7 +39,7 @@ jobs:
           gh secret set DEPLOY_SSH_KEY \
             --env production \
             --repo "$GITHUB_REPOSITORY" \
-            --body-file "$RUNNER_TEMP/cd_key"
+            < "$RUNNER_TEMP/cd_key"
 
       - name: Publish the public half
         run: |
