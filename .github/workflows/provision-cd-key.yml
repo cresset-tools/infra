@@ -43,6 +43,12 @@ jobs:
 
       - name: Publish the public half
         run: |
+          pub="$(cat "$RUNNER_TEMP/cd_key.pub")"
+          # Public key — safe to log. Markers let the operator (or tooling) grab
+          # it straight from the run log without opening the summary.
+          echo "CD_PUBKEY_BEGIN"
+          echo "$pub"
+          echo "CD_PUBKEY_END"
           {
             echo '### CD deploy public key'
             echo
@@ -50,7 +56,7 @@ jobs:
             echo 'bootstrap the boxes from that branch, then merge:'
             echo
             echo '```'
-            cat "$RUNNER_TEMP/cd_key.pub"
+            echo "$pub"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
