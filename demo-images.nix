@@ -12,14 +12,14 @@ let
   sconceSrc = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "sconce";
-    rev = "7189da79ad6c54b5bb22c47ff183000fcb818744";
-    hash = "sha256-246C5aXZ9iabq47bt+4OweRdo9JpMnRUCXkYbQKowuU=";
+    rev = "5f782a565cacb230bf65d9c5cdf9a62f2ba35525";
+    hash = "sha256-+9BtV7IeSx15cCDfyaGBSRaTFtwYMaAAFXjZwwenV7Y=";
   };
   rustToolchain = pkgs.rust-bin.fromRustupToolchainFile "${sconceSrc}/rust-toolchain.toml";
   rustPlatform = pkgs.makeRustPlatform { cargo = rustToolchain; rustc = rustToolchain; };
   sconce = rustPlatform.buildRustPackage {
     pname = "sconce";
-    version = "0.2.0";
+    version = "0.6.0";
     src = sconceSrc;
     cargoLock.lockFile = "${sconceSrc}/Cargo.lock";
     cargoBuildFlags = [ "--bin" "sconce" ];
