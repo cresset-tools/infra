@@ -4,9 +4,11 @@
 # hands each box a finished closure, so no host needs a FlakeHub token.
 #
 # Enable (one-time):
-#   1. Add the repo/environment secret DEPLOY_SSH_KEY = the private half of
+#   1. Run the `provision-cd-key` workflow — it generates the keypair in a
+#      runner, writes the private half to the production/DEPLOY_SSH_KEY secret
+#      (never leaves GitHub), and prints the public half. Put that public key in
 #      modules/ci-deploy-key.nix.
-#   2. Plant the public half by deploying each host once by hand
+#   2. Plant the public half by deploying each host once by hand from that branch
 #      (`nix run .#switch -- <host> <addr>`) — CI can't install its own key.
 #   3. Configure the `production` Environment's protection rules.
 # Until DEPLOY_SSH_KEY is set the job is a green no-op (see the gate step).
