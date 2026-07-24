@@ -196,7 +196,11 @@
         ${pkgs.coreutils}/bin/rm /srv/index
       fi
 
-      install -d -o deploy -g deploy -m 0755 /srv/index /srv/blobs /srv/modulargento
+      # /srv/site is the bougie.tools apex docroot — the VitePress site
+      # rsynced in by cresset-tools/bougie's website.yml. It must exist
+      # (and be deploy-owned) before nginx starts and before the first
+      # site deploy.
+      install -d -o deploy -g deploy -m 0755 /srv/index /srv/blobs /srv/modulargento /srv/site
       # bougie binary mirror tree. Both prefixes have to exist before
       # nginx starts so the `/github/` and `/installers/` location
       # blocks don't 404 on the first request (release.bougie.tools is
@@ -246,6 +250,15 @@
       }
       JSON
         chown deploy:deploy /srv/index/index.json
+      fi
+
+      # Seed a placeholder apex page so bougie.tools 200s on a fresh
+      # volume before the first website.yml deploy populates /srv/site.
+      if [ ! -e /srv/site/index.html ]; then
+        cat > /srv/site/index.html <<'HTML'
+      <!doctype html><meta charset=utf-8><title>bougie</title><p>Coming soon.
+      HTML
+        chown deploy:deploy /srv/site/index.html
       fi
     '';
   };
