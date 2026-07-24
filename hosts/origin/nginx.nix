@@ -236,9 +236,9 @@
     # one-liner; the exact-match install.sh / install.ps1 locations take
     # precedence over the catch-all `/`, so the one-liner keeps working
     # alongside the homepage. wick.sh / wick.ps1 / magequery.sh /
-    # magequery.ps1 / jibs.sh are the same trick for the other tools
-    # (short aliases for their releases-mirror installers; jibs has no
-    # .ps1 — it ships no Windows binaries).
+    # magequery.ps1 / magebuild.sh / magebuild.ps1 / jibs.sh are the same
+    # trick for the other tools (short aliases for their releases-mirror
+    # installers; jibs has no .ps1 — it ships no Windows binaries).
     # The site is a single self-contained `index.html` (no external
     # assets) in ./bougie, copied into the store at build time — edit it
     # and `nix run .#switch -- origin <ip>`.
@@ -290,6 +290,18 @@
       locations."= /magequery.ps1" = {
         extraConfig = ''
           return 301 https://releases.bougie.tools/installers/magequery/latest/magequery-installer.ps1;
+        '';
+      };
+
+      locations."= /magebuild.sh" = {
+        extraConfig = ''
+          return 301 https://releases.bougie.tools/installers/magebuild/latest/magebuild-installer.sh;
+        '';
+      };
+
+      locations."= /magebuild.ps1" = {
+        extraConfig = ''
+          return 301 https://releases.bougie.tools/installers/magebuild/latest/magebuild-installer.ps1;
         '';
       };
 
