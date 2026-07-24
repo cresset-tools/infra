@@ -102,24 +102,25 @@
       # `system.autoUpgrade`, so no host needs a FlakeHub token — the runner
       # holds the auth and hands each box a finished closure.
       #
-      # Only the persistent x86_64 production boxes are wired. demo (heavy
-      # Nix-built OCI images), origin (aarch64), and mageos-testing (throwaway)
-      # still deploy by hand via `nix run .#switch`.
+      # The persistent boxes are wired (origin is aarch64 → deploy.yml builds it
+      # on an arm64 runner). demo (heavy Nix-built OCI images) and mageos-testing
+      # (throwaway) still deploy by hand via `nix run .#switch`.
       deploy = {
         sshUser = "root";
         magicRollback = true;
         autoRollback = true;
         nodes =
           let
-            node = hostname: name: {
+            node = system: hostname: name: {
               inherit hostname;
               profiles.system.path =
-                deploy-rs.lib.x86_64-linux.activate.nixos self.nixosConfigurations.${name};
+                deploy-rs.lib.${system}.activate.nixos self.nixosConfigurations.${name};
             };
           in {
-            bougie-relay = node "2.28.9.32" "bougie-relay"; # *.bougie.show apex has no A record
-            bougierepo = node "bougierepo.com" "bougierepo";
-            telemetry = node "telemetry.bougie.tools" "telemetry";
+            bougie-relay = node "x86_64-linux" "2.28.9.32" "bougie-relay"; # *.bougie.show apex has no A record
+            bougierepo = node "x86_64-linux" "bougierepo.com" "bougierepo";
+            telemetry = node "x86_64-linux" "telemetry.bougie.tools" "telemetry";
+            origin = node "aarch64-linux" "origin.bougie.tools" "origin"; # aarch64 CAX11 dist-index/mirror
           };
       };
 
