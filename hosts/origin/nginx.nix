@@ -3,7 +3,7 @@
 #   index.bougie.tools     → /srv/index/                  (snapshot-model flat tree)
 #   blobs.bougie.tools     → /srv/blobs/                  (content-addressed tarballs)
 #   releases.bougie.tools  → /srv/releases/               (bougie binary mirror)
-#   bougie.tools           → ./bougie (homepage)      (+ install.sh / install.ps1 redirects)
+#   bougie.tools           → /srv/site/ (VitePress docs site)  (+ install.sh / install.ps1 redirects)
 #   cresset.tools          → ./cresset (homepage)     (umbrella brand)
 #   modulargento.cresset.tools → /srv/modulargento/          (Composer repo)
 #   www.{bougie,cresset}.tools → 301 → apex                (globalRedirect)
@@ -239,14 +239,16 @@
     # magequery.ps1 / magebuild.sh / magebuild.ps1 / jibs.sh are the same
     # trick for the other tools (short aliases for their releases-mirror
     # installers; jibs has no .ps1 — it ships no Windows binaries).
-    # The site is a single self-contained `index.html` (no external
-    # assets) in ./bougie, copied into the store at build time — edit it
-    # and `nix run .#switch -- origin <ip>`.
+    # The site is the VitePress build (cresset-tools/bougie, website/),
+    # rsynced into /srv/site by that repo's website.yml on every push to
+    # main. Multi-page static output with clean URLs (docs/foo.html
+    # served at /docs/foo) and content-hashed assets under /assets/.
+    # srv-init seeds a placeholder /srv/site/index.html on a fresh volume.
     virtualHosts."bougie.tools" = {
       enableACME = true;
       forceSSL = true;
 
-      root = ./bougie;
+      root = "/srv/site";
 
       # Server-level defaults. Per nginx semantics a child `add_header`
       # REPLACES (not extends) these, so the `/` location below re-emits
@@ -327,12 +329,24 @@
         '';
       };
 
-      # Static homepage. One self-contained file, so a short revalidating
-      # cache keeps edits visible without bypassing the CDN. Unknown
-      # paths 404 against the site root rather than redirecting.
+      # Content-hashed build assets (VitePress emits /assets/<name>.<hash>.
+      # {js,css}) — the bytes at a URL never change, so cache them for a
+      # year. Must precede the `/` catch-all.
+      locations."/assets/" = {
+        extraConfig = ''
+          add_header Cache-Control "public, max-age=31536000, immutable" always;
+          add_header X-Content-Type-Options nosniff always;
+          try_files $uri =404;
+        '';
+      };
+
+      # Pages. VitePress clean URLs mean `/docs/foo` is served from
+      # `docs/foo.html`, so try the `.html` sibling before the directory.
+      # HTML is short-cache-revalidating (not immutable) so edits show up.
+      # Unknown paths 404 against the site root rather than redirecting.
       locations."/" = {
         extraConfig = ''
-          try_files $uri $uri/ =404;
+          try_files $uri $uri.html $uri/ =404;
           add_header Cache-Control "public, max-age=300, must-revalidate" always;
           add_header X-Content-Type-Options nosniff always;
         '';
