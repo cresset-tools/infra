@@ -13,6 +13,7 @@
   imports = [
     ./nginx.nix
     ./mageos-maker.nix
+    ../../modules/ci-deploy-key.nix
   ];
 
   # ---- Bootloader ----
