@@ -79,6 +79,16 @@ jobs:
             extra-substituters = https://deploy-rs.cachix.org
             extra-trusted-public-keys = deploy-rs.cachix.org-1:xfNobmiwF/vzvK1gpfediPwpdIP0rpDV2rYqx40zdSI=
 
+      # FlakeHub Cache (cresset-tools org): push each freshly-built host closure
+      # and substitute it back on later runs, so re-deploys don't rebuild the
+      # 4 GB+ toplevel from scratch. Auth is the same GitHub OIDC (id-token:
+      # write) already used for the private bougie-relay input — no cache token
+      # or signing key to manage. The hosts still receive closures over SSH from
+      # the runner (deploy-rs), so no box needs a FlakeHub token of its own.
+      - name: Enable FlakeHub Cache
+        if: steps.gate.outputs.go == 'true'
+        uses: DeterminateSystems/flakehub-cache-action@v3
+
       - name: Load deploy key into ssh-agent
         if: steps.gate.outputs.go == 'true'
         env:
