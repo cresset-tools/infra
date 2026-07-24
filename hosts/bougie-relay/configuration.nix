@@ -47,6 +47,7 @@ in
 {
   imports = [
     inputs.sops-nix.nixosModules.sops
+    ../../modules/ci-deploy-key.nix
   ];
 
   # ---- Bootloader (CX23 boots legacy BIOS; mirror hosts/telemetry) ----
