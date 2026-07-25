@@ -1,0 +1,18 @@
+{
+  "name": "cresset-view-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@pierre/diffs": "1.2.12",
+    "@pierre/trees": "1.0.0-beta.5"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
+  }
+}

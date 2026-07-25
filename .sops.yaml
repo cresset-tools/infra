@@ -7,6 +7,7 @@ keys:
   - &host_demo age1un7lute5hqsx7lgj8hrx26xj58pn9jhnz7w3m6huv2l3ttrj7g7qj5fcw0
   - &host_relay age1wvf6v3dssj7ql78f74mmfs7mnnzpd9fxwendyv08w47uf3slzqqqk9xr0x
   - &host_bougierepo age1ukydq282r3lk35gnrmnmudwxkspe8vg2qvrj8euj7dz5mkvqddlq9aw9jm
+  - &host_internal age103k5048s740wmgpeuhjqvkmyah8mqhzm5mn002my5v3j5eph2dvq7098wg
 creation_rules:
   - path_regex: secrets/demo(\.ya?ml|/[^/]+)$
     key_groups:
@@ -26,3 +27,9 @@ creation_rules:
           - *admin_devbox
           - *admin_macbook
           - *host_bougierepo
+  - path_regex: secrets/internal(\.ya?ml|/[^/]+)$
+    key_groups:
+      - age:
+          - *admin_devbox
+          - *admin_macbook
+          - *host_internal

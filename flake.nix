@@ -121,6 +121,7 @@
             bougierepo = node "x86_64-linux" "bougierepo.com" "bougierepo";
             telemetry = node "x86_64-linux" "telemetry.bougie.tools" "telemetry";
             origin = node "aarch64-linux" "origin.bougie.tools" "origin"; # aarch64 CAX11 dist-index/mirror
+            internal = node "x86_64-linux" "internal.cresset.tools" "internal";
           };
       };
 
@@ -130,6 +131,7 @@
         let images = import ./demo-images.nix { inherit pkgs; };
         in {
           inherit (images) sconce sconceImage phpRuntime magentoImage;
+          cresset-view = import ./tools/cresset-view/package.nix { inherit pkgs; };
         };
 
       apps.${system} = {

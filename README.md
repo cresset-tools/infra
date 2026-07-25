@@ -16,6 +16,7 @@ hosts/
   telemetry/                     # Hetzner CX23 — bougie-collector telemetry ingest
   demo/                          # Hetzner CX33 — the licensing demo (Magento + sconce)
   mageos-testing/                # Mage-OS integration-testing worker
+  internal/                      # Authentik + authenticated jj code viewer
 modules/                         # shared NixOS modules (secrets.nix: sops-nix declarations)
 secrets/                         # sops-encrypted per-host secrets (demo.yaml)
 scripts/                         # operator helper scripts
@@ -55,6 +56,39 @@ Add a new host: `mkdir hosts/<name>` + `configuration.nix` + (optional)
   static HTML reports at `mageos-tests.bougie.tools`. Newest host —
   the manual post-deploy steps (deploy key, DNS, borg credentials) are
   listed in [`hosts/mageos-testing/testing.nix`](hosts/mageos-testing/testing.nix).
+- **`internal`** — Cresset's internal identity and tooling host. Authentik at
+  `auth.cresset.tools` is the standard identity provider; the read-only,
+  jj-native monorepo viewer is served at `code.cresset.tools` behind Authentik
+  forward-auth.
+
+### Internal host bootstrap
+
+The host's pre-generated SSH identity is stored outside the repository at
+`~/.config/sops/internal-host/`. Plant it as
+`/etc/ssh/ssh_host_ed25519_key` during `nixos-anywhere` provisioning so the host
+can decrypt `secrets/internal.yaml`.
+
+Before provisioning, create DNS A records for `internal.cresset.tools`,
+`auth.cresset.tools`, and `code.cresset.tools`, all pointing to the new server.
+Then install the host and complete Authentik's initial setup at:
+
+```text
+https://auth.cresset.tools/if/flow/initial-setup/
+```
+
+Create the `cresset-viewers` group, a single-application proxy provider for
+`https://code.cresset.tools`, and assign it to the embedded outpost. Bind an
+application access policy requiring membership in `cresset-viewers`.
+
+Publish a consistent repository snapshot from the canonical workstation with:
+
+```sh
+scripts/publish-cresset-view.sh
+```
+
+The script copies repository storage into a versioned directory, verifies the
+exact jj operation through `cresset-view --check`, and atomically activates it.
+It does not publish or serve the developer working-copy files.
 
 ## Bootstrap a host (one-time)
 
