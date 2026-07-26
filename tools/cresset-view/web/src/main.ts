@@ -166,8 +166,8 @@ function renderDiffs(files: FileChange[]) {
         overflow: 'wrap',
       });
       instance.render({
-        oldFile: file.before == null ? undefined : { name: file.path, contents: file.before },
-        newFile: file.after == null ? undefined : { name: file.path, contents: file.after },
+        oldFile: { name: file.path, contents: file.before ?? '' },
+        newFile: { name: file.path, contents: file.after ?? '' },
         containerWrapper: mount,
       });
       renderedDiffs.push(instance);
