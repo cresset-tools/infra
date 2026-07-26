@@ -33,6 +33,18 @@
       url = "https://flakehub.com/f/cresset-tools/bougie-relay/*.tar.gz";
       flake = false;
     };
+    # The cresset-sync worker, distributed the SAME way as bougie-relay: the
+    # monorepo's CI publishes operations/sync as a private FlakeHub artifact
+    # (GitHub OIDC), and hosts/internal builds it via buildRustPackage. `flake
+    # = false`: it's a plain Cargo project kept a source input, so the crate
+    # stays monorepo-internal (no cresset-tools/* repo) while remaining
+    # buildable from the standalone cresset-tools/infra clone.
+    # NOTE: this input resolves only once the monorepo CI publish job exists;
+    # until then `nix flake lock`/`metadata` cannot fetch it.
+    cresset-sync = {
+      url = "https://flakehub.com/f/cresset-tools/cresset-sync/*.tar.gz";
+      flake = false;
+    };
     # Push-based CD: .github/workflows/deploy.yml builds each host on the runner
     # and activates it over SSH with deploy-rs (magic rollback). Replaces the
     # per-box pull `system.autoUpgrade`.
@@ -42,7 +54,7 @@
     };
   };
 
-  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, rust-overlay, sops-nix, bougie-relay, deploy-rs }:
+  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, rust-overlay, sops-nix, bougie-relay, cresset-sync, deploy-rs }:
     let
       # CAX11 is aarch64. The deploy/switch helper apps run on the
       # operator's laptop too, so we expose them on both common arches.

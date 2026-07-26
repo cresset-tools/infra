@@ -42,6 +42,8 @@ in
 {
   imports = [
     inputs.sops-nix.nixosModules.sops
+    ./git-canonical.nix
+    ./cresset-sync.nix
   ];
 
   boot.loader.systemd-boot.enable = true;
