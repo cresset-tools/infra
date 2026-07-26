@@ -45,7 +45,9 @@ aside h2 { padding: 15px 18px; color: #9daa78; font-size: 11px; letter-spacing: 
 .signals em { padding: 2px 5px; color: #bfc6ad; background: #30362a; border-radius: 2px; font-size: 10px; font-style: normal; }
 .signals .warning { color: #f3c684; background: #49351e; }
 
-#file-tree { height: calc(100% - 46px); overflow: hidden; }
+#file-tree { height: calc(100% - 46px); overflow: auto; }
+.changed-file { width: 100%; padding: 8px 12px; overflow: hidden; color: #bfc6ad; background: transparent; border: 0; border-bottom: 1px solid #252921; cursor: pointer; font: 11px/1.35 "SFMono-Regular", Consolas, monospace; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.changed-file:hover, .changed-file:focus-visible { color: #e8eadf; background: #22271d; outline: 0; }
 .detail { min-width: 0; overflow: auto; background: #111310; }
 .change-heading { position: sticky; top: 0; z-index: 5; padding: 19px 24px; border-bottom: 1px solid #32372e; background: rgb(17 19 16 / 94%); backdrop-filter: blur(10px); }
 .change-heading > div { display: flex; gap: 8px; align-items: baseline; color: #8f967f; font-size: 11px; text-transform: uppercase; }

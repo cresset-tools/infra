@@ -1,5 +1,4 @@
 import { FileDiff } from '@pierre/diffs';
-import { FileTree } from '@pierre/trees';
 import './style.css';
 
 interface Revision {
@@ -11,6 +10,7 @@ interface Revision {
   authored_at: string;
   has_conflict: boolean;
   divergent: boolean;
+  working_copy: boolean;
   bookmarks: string[];
 }
 
@@ -47,7 +47,7 @@ app.innerHTML = `
   </header>
   <section class="workspace">
     <aside class="changes">
-      <h2>Changes</h2>
+      <h2>Revisions</h2>
       <div id="revision-list" class="revision-list"></div>
     </aside>
     <aside class="files">
@@ -69,7 +69,6 @@ const fileTreeContainer = requiredElement('#file-tree');
 const fileHeading = requiredElement('#file-heading');
 const changeHeading = requiredElement('#change-heading');
 const diffs = requiredElement('#diffs');
-let tree: FileTree | null = null;
 let renderedDiffs: FileDiff[] = [];
 let selectionGeneration = 0;
 
@@ -80,11 +79,12 @@ for (const revision of response.revisions) {
   const button = document.createElement('button');
   button.className = 'revision';
   button.innerHTML = `
-    <span class="revision-id">${escapeHtml(short(revision.change_id))}</span>
+    <span class="revision-id">${revision.working_copy ? '@ · ' : ''}${escapeHtml(short(revision.change_id))}</span>
     <strong>${escapeHtml(firstLine(revision.description) || '(no description)')}</strong>
     <small>${escapeHtml(revision.author_name)} · ${formatDate(revision.authored_at)}</small>
     <span class="signals">
       ${revision.bookmarks.map((name) => `<em>${escapeHtml(name)}</em>`).join('')}
+      ${revision.working_copy ? '<em>@</em>' : ''}
       ${revision.divergent ? '<em class="warning">divergent</em>' : ''}
       ${revision.has_conflict ? '<em class="warning">conflict</em>' : ''}
     </span>
@@ -105,31 +105,26 @@ async function selectRevision(revision: Revision, button: HTMLButtonElement) {
   diffs.textContent = 'Loading comparison…';
   fileHeading.textContent = 'Loading changed files…';
 
-  const result = await fetchJson<DiffResponse>(`/api/commits/${revision.commit_id}/diff`);
+  const result = await fetchJson<DiffResponse>(`/api/revisions/${revision.commit_id}/diff`);
   if (generation !== selectionGeneration) return;
 
   operation.textContent = `operation ${short(result.operation_id)}`;
   fileHeading.textContent = `${result.files.length.toLocaleString()} changed files`;
-  renderFileTree(result.files);
+  renderFileList(result.files);
   renderDiffs(result.files);
 }
 
-function renderFileTree(files: FileChange[]) {
-  tree?.cleanUp();
+function renderFileList(files: FileChange[]) {
   fileTreeContainer.replaceChildren();
-  tree = new FileTree({
-    paths: files.map((file) => file.path),
-    initialExpansion: 'open',
-    flattenEmptyDirectories: true,
-    search: true,
-    density: 'compact',
-    onSelectionChange(paths) {
-      const path = paths[0];
-      if (path == null) return;
-      document.querySelector(`[data-diff-path="${CSS.escape(path)}"]`)?.scrollIntoView({ behavior: 'smooth' });
-    },
-  });
-  tree.render({ containerWrapper: fileTreeContainer });
+  for (const file of files) {
+    const button = document.createElement('button');
+    button.className = 'changed-file';
+    button.textContent = file.path;
+    button.addEventListener('click', () => {
+      document.querySelector(`[data-diff-path="${CSS.escape(file.path)}"]`)?.scrollIntoView({ behavior: 'smooth' });
+    });
+    fileTreeContainer.append(button);
+  }
 }
 
 function renderDiffs(files: FileChange[]) {

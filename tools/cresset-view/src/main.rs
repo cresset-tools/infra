@@ -101,6 +101,7 @@ struct Revision {
     authored_at: String,
     has_conflict: bool,
     divergent: bool,
+    working_copy: bool,
     bookmarks: Vec<String>,
 }
 
@@ -178,8 +179,8 @@ async fn main() -> Result<()> {
         .route("/api/repository", get(repository))
         .route("/api/revisions", get(revisions))
         .route("/api/bookmarks", get(bookmarks))
-        .route("/api/commits/{id}/tree", get(tree))
-        .route("/api/commits/{id}/diff", get(diff))
+        .route("/api/revisions/{id}/tree", get(tree))
+        .route("/api/revisions/{id}/diff", get(diff))
         .fallback_service(static_files)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -299,7 +300,7 @@ async fn tree(
 
         Ok(TreeResponse {
             operation_id: loaded.repo.op_id().hex(),
-            change_id: commit.change_id().hex(),
+            change_id: commit.change_id().reverse_hex(),
             commit_id: commit.id().hex(),
             paths,
         })
@@ -341,7 +342,7 @@ async fn diff(
 
         Ok(DiffResponse {
             operation_id: loaded.repo.op_id().hex(),
-            change_id: commit.change_id().hex(),
+            change_id: commit.change_id().reverse_hex(),
             commit_id: commit.id().hex(),
             files,
         })
@@ -394,10 +395,8 @@ async fn load_repository(path: &Path) -> Result<LoadedRepository> {
 }
 
 async fn resolve_visible_commit(repo: &ReadonlyRepo, id: &str) -> Result<Commit> {
-    if id.len() < 8 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        bail!(
-            "revision must be a hexadecimal jj change ID or commit ID prefix of at least 8 characters"
-        );
+    if id.len() < 8 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        bail!("revision must be a jj change ID or commit ID prefix of at least 8 characters");
     }
 
     let mut matches = BTreeMap::new();
@@ -406,7 +405,7 @@ async fn resolve_visible_commit(repo: &ReadonlyRepo, id: &str) -> Result<Commit>
         .stream()
         .commits(repo.store());
     while let Some(commit) = stream.try_next().await? {
-        if commit.id().hex().starts_with(id) || commit.change_id().hex().starts_with(id) {
+        if commit.id().hex().starts_with(id) || commit.change_id().reverse_hex().starts_with(id) {
             matches.insert(commit.id().hex(), commit);
         }
     }
@@ -431,7 +430,7 @@ fn revision_from_commit(repo: &ReadonlyRepo, commit: &Commit) -> Result<Revision
         .collect();
 
     Ok(Revision {
-        change_id: commit.change_id().hex(),
+        change_id: commit.change_id().reverse_hex(),
         commit_id: commit.id().hex(),
         parent_commit_ids: commit.parent_ids().iter().map(ObjectId::hex).collect(),
         description: commit.description().to_owned(),
@@ -440,6 +439,7 @@ fn revision_from_commit(repo: &ReadonlyRepo, commit: &Commit) -> Result<Revision
         authored_at: commit.author().timestamp.to_datetime()?.to_rfc3339(),
         has_conflict: commit.has_conflict(),
         divergent,
+        working_copy: repo.view().is_wc_commit_id(commit.id()),
         bookmarks,
     })
 }
