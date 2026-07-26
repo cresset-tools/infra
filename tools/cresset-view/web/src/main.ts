@@ -1,5 +1,5 @@
 import { FileDiff } from '@pierre/diffs';
-import { FileTree, preparePresortedFileTreeInput } from '@pierre/trees';
+import { FileTree } from '@pierre/trees';
 import './style.css';
 
 interface Revision {
@@ -34,17 +34,6 @@ interface DiffResponse {
   files: FileChange[];
 }
 
-interface TreeResponse {
-  operation_id: string;
-  change_id: string;
-  commit_id: string;
-  paths: Array<{
-    path: string;
-    kind: string;
-    conflicted: boolean;
-  }>;
-}
-
 const app = document.querySelector<HTMLElement>('#app');
 if (app == null) throw new Error('missing app element');
 
@@ -62,7 +51,7 @@ app.innerHTML = `
       <div id="revision-list" class="revision-list"></div>
     </aside>
     <aside class="files">
-      <h2 id="file-heading">Files</h2>
+      <h2 id="file-heading">Changed files</h2>
       <div id="file-tree"></div>
     </aside>
     <article class="detail">
@@ -83,7 +72,6 @@ const diffs = requiredElement('#diffs');
 let tree: FileTree | null = null;
 let renderedDiffs: FileDiff[] = [];
 let selectionGeneration = 0;
-const treeCache = new Map<string, Promise<TreeResponse>>();
 
 const response = await fetchJson<RevisionsResponse>('/api/revisions?limit=150');
 operation.textContent = `operation ${short(response.operation_id)}`;
@@ -115,45 +103,29 @@ async function selectRevision(revision: Revision, button: HTMLButtonElement) {
     <p>commit <code>${escapeHtml(short(revision.commit_id))}</code> by ${escapeHtml(revision.author_name)}</p>
   `;
   diffs.textContent = 'Loading comparison…';
-  fileHeading.textContent = 'Loading files…';
+  fileHeading.textContent = 'Loading changed files…';
 
-  const [treeResult, diffResult] = await loadRevision(revision.commit_id);
+  const result = await fetchJson<DiffResponse>(`/api/commits/${revision.commit_id}/diff`);
   if (generation !== selectionGeneration) return;
 
-  operation.textContent = `operation ${short(treeResult.operation_id)}`;
-  fileHeading.textContent = `${treeResult.paths.length.toLocaleString()} files · ${diffResult.files.length.toLocaleString()} changed`;
-  renderFileTree(treeResult, diffResult.files);
-  renderDiffs(diffResult.files);
+  operation.textContent = `operation ${short(result.operation_id)}`;
+  fileHeading.textContent = `${result.files.length.toLocaleString()} changed files`;
+  renderFileTree(result.files);
+  renderDiffs(result.files);
 }
 
-async function loadRevision(commitId: string): Promise<[TreeResponse, DiffResponse]> {
-  const treeRequest = treeCache.get(commitId) ?? fetchJson<TreeResponse>(`/api/commits/${commitId}/tree`);
-  treeCache.set(commitId, treeRequest);
-  const result = await Promise.all([
-    treeRequest,
-    fetchJson<DiffResponse>(`/api/commits/${commitId}/diff`),
-  ]);
-  if (result[0].operation_id !== result[1].operation_id) {
-    treeCache.delete(commitId);
-    return loadRevision(commitId);
-  }
-  return result;
-}
-
-function renderFileTree(treeResult: TreeResponse, changedFiles: FileChange[]) {
+function renderFileTree(files: FileChange[]) {
   tree?.cleanUp();
   fileTreeContainer.replaceChildren();
-  const paths = treeResult.paths.map((entry) => entry.path);
-  const changedPaths = new Set(changedFiles.map((file) => file.path));
   tree = new FileTree({
-    preparedInput: preparePresortedFileTreeInput(paths),
-    initialExpansion: 2,
+    paths: files.map((file) => file.path),
+    initialExpansion: 'open',
     flattenEmptyDirectories: true,
     search: true,
     density: 'compact',
     onSelectionChange(paths) {
       const path = paths[0];
-      if (path == null || !changedPaths.has(path)) return;
+      if (path == null) return;
       document.querySelector(`[data-diff-path="${CSS.escape(path)}"]`)?.scrollIntoView({ behavior: 'smooth' });
     },
   });
