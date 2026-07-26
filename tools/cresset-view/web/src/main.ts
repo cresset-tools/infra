@@ -1,5 +1,5 @@
 import { FileDiff } from '@pierre/diffs';
-import { FileTree } from '@pierre/trees';
+import { FileTree, prepareFileTreeInput, type FileTreePreparedInput } from '@pierre/trees';
 import './style.css';
 
 interface Revision {
@@ -110,20 +110,24 @@ async function selectRevision(revision: Revision, button: HTMLButtonElement) {
   const result = await fetchJson<DiffResponse>(`/api/revisions/${revision.commit_id}/diff`);
   if (generation !== selectionGeneration) return;
 
+  const preparedInput = prepareFileTreeInput(result.files.map((file) => file.path), {
+    flattenEmptyDirectories: false,
+  });
+  const filesByPath = new Map(result.files.map((file) => [file.path, file]));
+  const sortedFiles = preparedInput.paths.map((path) => filesByPath.get(path)!);
   operation.textContent = `operation ${short(result.operation_id)}`;
   fileHeading.textContent = `${result.files.length.toLocaleString()} changed files`;
-  renderFileTree(result.files);
-  renderDiffs(result.files);
+  renderFileTree(preparedInput);
+  renderDiffs(sortedFiles);
 }
 
-function renderFileTree(files: FileChange[]) {
+function renderFileTree(preparedInput: FileTreePreparedInput) {
   tree?.cleanUp();
   fileTreeContainer.replaceChildren();
   tree = new FileTree({
-    paths: files.map((file) => file.path),
+    preparedInput,
     initialExpansion: 'open',
     initialVisibleRowCount: 40,
-    flattenEmptyDirectories: false,
     search: true,
     density: 'compact',
     onSelectionChange(paths) {
