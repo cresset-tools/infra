@@ -1,4 +1,5 @@
 import { FileDiff } from '@pierre/diffs';
+import { FileTree } from '@pierre/trees';
 import './style.css';
 
 interface Revision {
@@ -69,6 +70,7 @@ const fileTreeContainer = requiredElement('#file-tree');
 const fileHeading = requiredElement('#file-heading');
 const changeHeading = requiredElement('#change-heading');
 const diffs = requiredElement('#diffs');
+let tree: FileTree | null = null;
 let renderedDiffs: FileDiff[] = [];
 let selectionGeneration = 0;
 
@@ -110,21 +112,27 @@ async function selectRevision(revision: Revision, button: HTMLButtonElement) {
 
   operation.textContent = `operation ${short(result.operation_id)}`;
   fileHeading.textContent = `${result.files.length.toLocaleString()} changed files`;
-  renderFileList(result.files);
+  renderFileTree(result.files);
   renderDiffs(result.files);
 }
 
-function renderFileList(files: FileChange[]) {
+function renderFileTree(files: FileChange[]) {
+  tree?.cleanUp();
   fileTreeContainer.replaceChildren();
-  for (const file of files) {
-    const button = document.createElement('button');
-    button.className = 'changed-file';
-    button.textContent = file.path;
-    button.addEventListener('click', () => {
-      document.querySelector(`[data-diff-path="${CSS.escape(file.path)}"]`)?.scrollIntoView({ behavior: 'smooth' });
-    });
-    fileTreeContainer.append(button);
-  }
+  tree = new FileTree({
+    paths: files.map((file) => file.path),
+    initialExpansion: 'open',
+    initialVisibleRowCount: 40,
+    flattenEmptyDirectories: false,
+    search: true,
+    density: 'compact',
+    onSelectionChange(paths) {
+      const path = paths[0];
+      if (path == null) return;
+      document.querySelector(`[data-diff-path="${CSS.escape(path)}"]`)?.scrollIntoView({ behavior: 'smooth' });
+    },
+  });
+  tree.render({ containerWrapper: fileTreeContainer });
 }
 
 function renderDiffs(files: FileChange[]) {
