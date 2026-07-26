@@ -69,6 +69,7 @@ const revisionList = requiredElement('#revision-list');
 const fileTreeContainer = requiredElement('#file-tree');
 const fileHeading = requiredElement('#file-heading');
 const changeHeading = requiredElement('#change-heading');
+const detail = requiredElement('.detail');
 const diffs = requiredElement('#diffs');
 let tree: FileTree | null = null;
 let renderedDiffs: FileDiff[] = [];
@@ -133,7 +134,11 @@ function renderFileTree(preparedInput: FileTreePreparedInput) {
     onSelectionChange(paths) {
       const path = paths[0];
       if (path == null) return;
-      document.querySelector(`[data-diff-path="${CSS.escape(path)}"]`)?.scrollIntoView({ behavior: 'smooth' });
+      const target = document.querySelector<HTMLElement>(`[data-diff-path="${CSS.escape(path)}"]`);
+      if (target == null) return;
+      const top = target.getBoundingClientRect().top - detail.getBoundingClientRect().top
+        + detail.scrollTop - changeHeading.offsetHeight - 12;
+      detail.scrollTo({ top, behavior: 'smooth' });
     },
   });
   tree.render({ containerWrapper: fileTreeContainer });
