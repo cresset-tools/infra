@@ -153,9 +153,9 @@ dependencies = [
 
 [[package]]
 name = "bougie-errors"
-version = "0.47.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e19a412790a40367ff9cd5975b08d6c777aa6b3641163ba21a7b760044668846"
+checksum = "2ccdaa6b3e64c75e945d917f1ec7053036752a702a345d9f977360527320f6df"
 dependencies = [
  "eyre",
  "thiserror",
@@ -163,9 +163,9 @@ dependencies = [
 
 [[package]]
 name = "bougie-fs"
-version = "0.47.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da1688c0b39f4ce1dbceaaf287fb977abf3055cbf49dd667046e7de61b5e9aab"
+checksum = "4d5bd13d7d16bba30a6365ef5fe095aa3fccaa0148734d2a5f453a3fae186474"
 dependencies = [
  "bougie-errors",
  "bougie-paths",
@@ -177,9 +177,9 @@ dependencies = [
 
 [[package]]
 name = "bougie-paths"
-version = "0.47.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd707049d9de7885af379f0d760744b6fadaf0c4bc8f2fe0c372dfe8bfa64f78"
+checksum = "228f47a5d0bc01c86026604bc6037a1f1baf7d6dbbf16523bec4bc0fe22e1f74"
 dependencies = [
  "etcetera",
  "eyre",
@@ -188,9 +188,9 @@ dependencies = [
 
 [[package]]
 name = "bougie-telemetry"
-version = "0.47.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f6bd5ad793fe417bb2370df153a66208627ab8207cfa67c85cb71a1a38f7fc7"
+checksum = "e672afdba5c639bac56d528a581118143b08fee94d44f341fb8c89465a98b6ea"
 dependencies = [
  "backtrace",
  "bougie-errors",
@@ -209,9 +209,9 @@ dependencies = [
 
 [[package]]
 name = "bougie-version"
-version = "0.47.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84fa27478e94c8da5441e722808c89c2fd93316654f0ffd8b45aceaa745d09a4"
+checksum = "8a632af8de212aeb19f2510cb3899c224b949ec9faa33aa24f9dc7c92854c3e3"
 dependencies = [
  "composer-semver",
  "eyre",

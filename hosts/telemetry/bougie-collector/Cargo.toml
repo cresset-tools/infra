@@ -29,5 +29,17 @@ codegen-units = 1
 # The growable allowlist vocabularies, shared verbatim with the bougie
 # client. Bumping this version is how new commands/extensions/services
 # become accepted.
+#
+# An unknown verb is NOT bucketed as "unknown" — `parse_command` filters
+# `name` against COMMAND_VOCAB with `?`, so the whole event is dropped.
+# That makes this pin release-ordered: a command is only recorded once a
+# bougie-telemetry carrying it is published AND this collector has been
+# bumped and redeployed. Lagging silently loses data — this pin sat at
+# 0.47 while the client shipped 0.52, so every `share`, `db`, `doctor`,
+# `ci` and `login` event (and the `vcs` outcome) was discarded.
+#
+# So: bump this as part of shipping a release that adds a verb, not after.
+# PENDING: `bougie version` is in the client tree but not yet published;
+# it needs the 0.54 (or later) bump once that release lands.
 [dependencies.bougie-telemetry]
-version = "0.47"
+version = "0.53"
