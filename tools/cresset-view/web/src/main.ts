@@ -1,4 +1,12 @@
-import { File as FileViewer, FileDiff, type ThemeTypes } from '@pierre/diffs';
+import {
+  CodeView,
+  File as FileViewer,
+  parseDiffFromFile,
+  type CodeViewItem,
+  type CodeViewOptions,
+  type FileDiffMetadata,
+  type ThemeTypes,
+} from '@pierre/diffs';
 import { FileTree, prepareFileTreeInput, type FileTreePreparedInput } from '@pierre/trees';
 import './style.css';
 
@@ -23,6 +31,7 @@ interface RevisionsResponse {
 }
 
 interface FileChange {
+  index: number;
   path: string;
   before: string | null;
   after: string | null;
@@ -30,12 +39,16 @@ interface FileChange {
   binary: boolean;
 }
 
-interface DiffResponse {
+interface DiffMetadata {
   operation_id: string;
   change_id: string;
   commit_id: string;
-  files: FileChange[];
+  paths: string[];
 }
+
+type DiffEvent = ({ type: 'metadata' } & DiffMetadata)
+  | ({ type: 'file' } & FileChange)
+  | { type: 'error'; error: string };
 
 interface TreeResponse {
   operation_id: string;
@@ -129,18 +142,22 @@ const revisionPan = requiredElement<HTMLInputElement>('#revision-pan');
 const fileTreeContainer = requiredElement('#file-tree');
 const fileHeading = requiredElement('#file-heading');
 const changeHeading = requiredElement('#change-heading');
-const detail = requiredElement('.detail');
 const content = requiredElement('#content');
 const themeSelect = requiredElement<HTMLSelectElement>('#theme');
 const modeButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
 let tree: FileTree | null = null;
 let renderedFile: FileViewer | null = null;
-let renderedDiffs: FileDiff[] = [];
+let codeView: CodeView | null = null;
+let diffItems: CodeViewItem[] = [];
+let loadedDiffPaths = new Set<string>();
 let currentRevision: Revision | null = null;
 let currentRevisionButton: HTMLButtonElement | null = null;
-let currentMode: ViewMode = 'browse';
+const initialUrlState = readUrlState();
+let currentMode: ViewMode = initialUrlState.path == null ? 'browse' : 'changes';
 let selectionGeneration = 0;
 let fileGeneration = 0;
+let diffController: AbortController | null = null;
+let diffParser: DiffParser | null = null;
 let themePreference = readThemePreference();
 
 themeSelect.value = themePreference;
@@ -156,57 +173,70 @@ for (const button of modeButtons) {
 }
 syncModeButtons();
 
-const response = await fetchJson<RevisionsResponse>('/api/revisions?limit=150');
-operation.textContent = `operation ${short(response.operation_id)}`;
-headCount.textContent = `${response.head_count.toLocaleString()} heads`;
-const revisionButtons = new Map<string, HTMLButtonElement>();
-const graphRows = layoutRevisionGraph(response.revisions);
-const maxGraphLanes = Math.max(1, ...graphRows.map((row) => row.laneCount));
-const graphLaneGap = 14;
-const graphWidth = Math.ceil(24 + (maxGraphLanes - 1) * graphLaneGap);
+void initialize();
 
-for (const [index, revision] of response.revisions.entries()) {
-  const button = document.createElement('button');
-  button.className = 'revision';
-  button.style.setProperty('--graph-width', `${graphWidth}px`);
-  button.innerHTML = `
-    ${renderRevisionGraph(graphRows[index], revision, graphWidth, graphLaneGap)}
-    <span class="revision-copy">
-      <span class="revision-id">${revision.working_copy ? '@ · ' : ''}${escapeHtml(short(revision.change_id))}</span>
-      <strong>${escapeHtml(firstLine(revision.description) || '(no description)')}</strong>
-      <small>${escapeHtml(revision.author_name)} · ${formatDate(revision.authored_at)}</small>
-      <span class="signals">
-        ${revision.bookmarks.map((name) => `<em>${escapeHtml(name)}</em>`).join('')}
-        ${revision.working_copy ? '<em>@</em>' : ''}
-        ${revision.is_head ? '<em class="head">head</em>' : ''}
-        ${revision.divergent ? '<em class="warning">divergent</em>' : ''}
-        ${revision.has_conflict ? '<em class="warning">conflict</em>' : ''}
+async function initialize() {
+  const response = await fetchJson<RevisionsResponse>('/api/revisions?limit=150');
+  operation.textContent = `operation ${short(response.operation_id)}`;
+  headCount.textContent = `${response.head_count.toLocaleString()} heads`;
+  const revisionButtons = new Map<string, HTMLButtonElement>();
+  const graphRows = layoutRevisionGraph(response.revisions);
+  const maxGraphLanes = Math.max(1, ...graphRows.map((row) => row.laneCount));
+  const graphLaneGap = 14;
+  const graphWidth = Math.ceil(24 + (maxGraphLanes - 1) * graphLaneGap);
+
+  for (const [index, revision] of response.revisions.entries()) {
+    const button = document.createElement('button');
+    button.className = 'revision';
+    button.style.setProperty('--graph-width', `${graphWidth}px`);
+    button.innerHTML = `
+      ${renderRevisionGraph(graphRows[index], revision, graphWidth, graphLaneGap)}
+      <span class="revision-copy">
+        <span class="revision-id">${revision.working_copy ? '@ · ' : ''}${escapeHtml(short(revision.change_id))}</span>
+        <strong>${escapeHtml(firstLine(revision.description) || '(no description)')}</strong>
+        <small>${escapeHtml(revision.author_name)} · ${formatDate(revision.authored_at)}</small>
+        <span class="signals">
+          ${revision.bookmarks.map((name) => `<em>${escapeHtml(name)}</em>`).join('')}
+          ${revision.working_copy ? '<em>@</em>' : ''}
+          ${revision.is_head ? '<em class="head">head</em>' : ''}
+          ${revision.divergent ? '<em class="warning">divergent</em>' : ''}
+          ${revision.has_conflict ? '<em class="warning">conflict</em>' : ''}
+        </span>
       </span>
-    </span>
-  `;
-  button.addEventListener('click', () => void selectRevision(revision, button));
-  revisionButtons.set(revision.commit_id, button);
-  revisionList.append(button);
-}
-syncRevisionPanRange();
-revisionPan.addEventListener('input', () => {
-  revisionList.scrollLeft = Number(revisionPan.value);
-});
-revisionList.addEventListener('scroll', () => {
-  revisionPan.value = String(revisionList.scrollLeft);
-}, { passive: true });
-new ResizeObserver(syncRevisionPanRange).observe(revisionList);
+    `;
+    button.addEventListener('click', () => void selectRevision(revision, button, true));
+    revisionButtons.set(revision.commit_id, button);
+    revisionList.append(button);
+  }
+  syncRevisionPanRange();
+  revisionPan.addEventListener('input', () => {
+    revisionList.scrollLeft = Number(revisionPan.value);
+  });
+  revisionList.addEventListener('scroll', () => {
+    revisionPan.value = String(revisionList.scrollLeft);
+  }, { passive: true });
+  new ResizeObserver(syncRevisionPanRange).observe(revisionList);
 
-const initialRevision = response.revisions.find((revision) => revision.working_copy) ?? response.revisions[0];
-if (initialRevision != null) {
-  await selectRevision(initialRevision, revisionButtons.get(initialRevision.commit_id)!);
+  let initialRevision = initialUrlState.revision == null
+    ? response.revisions.find((revision) => revision.working_copy) ?? response.revisions[0]
+    : findRevision(response.revisions, initialUrlState.revision);
+  if (initialRevision == null && initialUrlState.revision != null) {
+    initialRevision = await fetchJson<Revision>(`/api/revisions/${encodeURIComponent(initialUrlState.revision)}`);
+  }
+  if (initialRevision != null) {
+    await selectRevision(initialRevision, revisionButtons.get(initialRevision.commit_id) ?? null, false);
+  }
+  window.addEventListener('popstate', () => void restoreUrlState(response.revisions, revisionButtons));
 }
 
 async function setMode(mode: ViewMode) {
   if (mode === currentMode) return;
   currentMode = mode;
   syncModeButtons();
-  if (currentRevision != null) await loadRevision(currentRevision);
+  if (currentRevision != null) {
+    setViewUrl(currentRevision, null, false);
+    await loadRevision(currentRevision, null);
+  }
 }
 
 function syncModeButtons() {
@@ -224,19 +254,25 @@ function syncRevisionPanRange() {
   revisionPan.value = String(Math.min(maximum, revisionList.scrollLeft));
 }
 
-async function selectRevision(revision: Revision, button: HTMLButtonElement) {
+async function selectRevision(revision: Revision, button: HTMLButtonElement | null, updateHistory: boolean) {
   currentRevision = revision;
   currentRevisionButton?.classList.remove('selected');
   currentRevisionButton = button;
-  button.classList.add('selected');
-  await loadRevision(revision);
+  button?.classList.add('selected');
+  if (updateHistory) setViewUrl(revision, null, true);
+  const requestedPath = currentMode === 'changes' ? readUrlState().path : null;
+  await loadRevision(revision, requestedPath);
 }
 
-async function loadRevision(revision: Revision) {
+async function loadRevision(revision: Revision, requestedPath: string | null = null) {
   const generation = ++selectionGeneration;
   fileGeneration += 1;
+  diffController?.abort();
+  diffController = null;
+  diffParser?.terminate();
+  diffParser = null;
   cleanContentRenderers();
-  detail.scrollTop = 0;
+  content.scrollTop = 0;
   renderRevisionHeading(revision);
 
   if (currentMode === 'browse') {
@@ -255,17 +291,50 @@ async function loadRevision(revision: Revision) {
 
   fileHeading.textContent = 'Loading changed files…';
   content.textContent = 'Loading comparison…';
-  const result = await fetchJson<DiffResponse>(`/api/revisions/${revision.commit_id}/diff`);
+  const controller = new AbortController();
+  diffController = controller;
+  let metadataReceived = false;
+  let processedFiles = 0;
+  try {
+    await streamDiff(
+      `/api/revisions/${revision.commit_id}/diff${requestedPath == null ? '' : `?path=${encodeURIComponent(requestedPath)}`}`,
+      controller.signal,
+      async (event) => {
+        if (generation !== selectionGeneration) return;
+        if (event.type === 'metadata') {
+          metadataReceived = true;
+          operation.textContent = `operation ${short(event.operation_id)}`;
+          fileHeading.textContent = `${event.paths.length.toLocaleString()} changed files`;
+          const preparedInput = prepareFileTreeInput(event.paths, { flattenEmptyDirectories: false });
+          renderFileTree(preparedInput, 'open', (path) => void selectDiffPath(path));
+          setupCodeView(event.paths);
+          diffParser = new DiffParser();
+          if (requestedPath != null) scrollToDiff(requestedPath, 'instant');
+          return;
+        }
+        if (event.type === 'error') throw new Error(event.error);
+        const fileDiff = await diffParser!.parse(event);
+        if (generation !== selectionGeneration) return;
+        const item = codeViewItem(event.path, fileDiff, 1);
+        diffItems[event.index] = item;
+        loadedDiffPaths.add(event.path);
+        codeView?.updateItem(item);
+        processedFiles += 1;
+        fileHeading.textContent = `${processedFiles.toLocaleString()} / ${diffItems.length.toLocaleString()} changed files`;
+        if (event.path === requestedPath) scrollToDiff(event.path, 'instant');
+        if (processedFiles % 4 === 0) await nextFrame();
+      },
+    );
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    throw error;
+  } finally {
+    if (diffController === controller) diffController = null;
+  }
   if (generation !== selectionGeneration) return;
-  const preparedInput = prepareFileTreeInput(result.files.map((file) => file.path), {
-    flattenEmptyDirectories: false,
-  });
-  const filesByPath = new Map(result.files.map((file) => [file.path, file]));
-  const sortedFiles = preparedInput.paths.map((path) => filesByPath.get(path)!);
-  operation.textContent = `operation ${short(result.operation_id)}`;
-  fileHeading.textContent = `${result.files.length.toLocaleString()} changed files`;
-  renderFileTree(preparedInput, 'open', scrollToDiff);
-  renderDiffs(sortedFiles);
+  if (!metadataReceived) throw new Error('diff stream did not include metadata');
+  fileHeading.textContent = `${diffItems.length.toLocaleString()} changed files`;
+  if (diffItems.length === 0) content.innerHTML = '<p class="empty-state">This revision has no file changes.</p>';
 }
 
 function renderRevisionHeading(revision: Revision) {
@@ -334,56 +403,114 @@ async function showFile(revision: Revision, path: string) {
   });
 }
 
-function scrollToDiff(path: string) {
-  const target = document.querySelector<HTMLElement>(`[data-diff-path="${CSS.escape(path)}"]`);
-  if (target == null) return;
-  const top = target.getBoundingClientRect().top - detail.getBoundingClientRect().top
-    + detail.scrollTop - changeHeading.offsetHeight - 12;
-  detail.scrollTo({ top, behavior: 'smooth' });
-}
-
-function renderDiffs(files: FileChange[]) {
-  cleanContentRenderers();
-  content.replaceChildren();
-
-  if (files.length === 0) {
-    content.innerHTML = '<p class="empty-state">This revision has no file changes.</p>';
+async function selectDiffPath(path: string) {
+  const revision = currentRevision;
+  if (revision == null || currentMode !== 'changes') return;
+  setViewUrl(revision, path, true);
+  if (loadedDiffPaths.has(path)) {
+    scrollToDiff(path, 'smooth-auto');
     return;
   }
+  await loadRevision(revision, path);
+}
 
-  for (const file of files) {
-    const section = document.createElement('section');
-    section.className = 'file-diff';
-    section.dataset.diffPath = file.path;
-    if (file.binary) {
-      section.innerHTML = `<h3>${escapeHtml(file.path)}</h3><p>Binary or oversized content is not rendered.</p>`;
-    } else if (file.conflicted) {
-      section.innerHTML = `<h3>${escapeHtml(file.path)}</h3><p>This path contains an unresolved jj conflict.</p>`;
-    } else {
-      const mount = document.createElement('div');
-      section.append(mount);
-      const instance = new FileDiff({
-        theme: { dark: 'pierre-dark', light: 'pierre-light' },
-        themeType: pierreThemeType(),
-        diffStyle: 'unified',
-        overflow: 'wrap',
-      });
-      instance.render({
-        oldFile: { name: file.path, contents: file.before ?? '' },
-        newFile: { name: file.path, contents: file.after ?? '' },
-        containerWrapper: mount,
-      });
-      renderedDiffs.push(instance);
-    }
-    content.append(section);
-  }
+function scrollToDiff(path: string, behavior: 'instant' | 'smooth-auto') {
+  codeView?.scrollTo({ type: 'item', id: path, align: 'start', behavior });
+}
+
+function setupCodeView(paths: string[]) {
+  cleanContentRenderers();
+  content.replaceChildren();
+  loadedDiffPaths = new Set();
+  diffItems = paths.map((path) => codeViewPlaceholder(path));
+  if (paths.length === 0) return;
+  codeView = new CodeView(codeViewOptions());
+  codeView.setup(content);
+  codeView.setItems(diffItems);
+}
+
+function codeViewPlaceholder(path: string): CodeViewItem {
+  return {
+    id: path,
+    type: 'diff',
+    fileDiff: parseDiffFromFile(
+      { name: path, contents: '' },
+      { name: path, contents: '' },
+    ),
+    version: 0,
+    collapsed: true,
+  };
+}
+
+function codeViewItem(path: string, fileDiff: FileDiffMetadata, version: number): CodeViewItem {
+  return {
+    id: path,
+    type: 'diff',
+    fileDiff,
+    version,
+    collapsed: false,
+  };
+}
+
+function codeViewOptions(): CodeViewOptions<undefined> {
+  return {
+    theme: { dark: 'pierre-dark', light: 'pierre-light' },
+    themeType: pierreThemeType(),
+    diffStyle: 'unified',
+    overflow: 'wrap',
+    stickyHeaders: true,
+    layout: { paddingTop: 22, paddingBottom: 22, gap: 18 },
+  };
 }
 
 function cleanContentRenderers() {
   renderedFile?.cleanUp();
   renderedFile = null;
-  for (const instance of renderedDiffs) instance.cleanUp();
-  renderedDiffs = [];
+  codeView?.cleanUp();
+  codeView = null;
+  diffItems = [];
+  loadedDiffPaths.clear();
+}
+
+class DiffParser {
+  private readonly worker = new Worker(new URL('./diff-worker.ts', import.meta.url), { type: 'module' });
+  private readonly pending = new Map<number, {
+    resolve: (fileDiff: FileDiffMetadata) => void;
+    reject: (error: Error) => void;
+  }>();
+  private nextId = 0;
+
+  constructor() {
+    this.worker.addEventListener('message', (message: MessageEvent<{
+      id: number;
+      fileDiff?: FileDiffMetadata;
+      error?: string;
+    }>) => {
+      const pending = this.pending.get(message.data.id);
+      if (pending == null) return;
+      this.pending.delete(message.data.id);
+      if (message.data.fileDiff != null) pending.resolve(message.data.fileDiff);
+      else pending.reject(new Error(message.data.error ?? 'diff parser failed'));
+    });
+    this.worker.addEventListener('error', (event) => {
+      for (const pending of this.pending.values()) pending.reject(new Error(event.message));
+      this.pending.clear();
+    });
+  }
+
+  parse(file: FileChange): Promise<FileDiffMetadata> {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.worker.postMessage({ id, file });
+    });
+  }
+
+  terminate() {
+    this.worker.terminate();
+    for (const pending of this.pending.values()) pending.reject(new DOMException('Aborted', 'AbortError'));
+    this.pending.clear();
+  }
 }
 
 function readThemePreference(): ThemePreference {
@@ -396,7 +523,7 @@ function applyTheme(preference: ThemePreference) {
   applyTreeTheme();
   const themeType = pierreThemeType();
   renderedFile?.setThemeType(themeType);
-  for (const instance of renderedDiffs) instance.setThemeType(themeType);
+  codeView?.setOptions(codeViewOptions());
 }
 
 function applyTreeTheme() {
@@ -484,6 +611,69 @@ async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(await response.text());
   return response.json() as Promise<T>;
+}
+
+async function streamDiff(
+  url: string,
+  signal: AbortSignal,
+  onEvent: (event: DiffEvent) => void | Promise<void>,
+) {
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error(await response.text());
+  if (response.body == null) throw new Error('diff response cannot be streamed');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    buffered += decoder.decode(value, { stream: !done });
+    const lines = buffered.split('\n');
+    buffered = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line !== '') await onEvent(JSON.parse(line) as DiffEvent);
+    }
+    if (done) break;
+  }
+  if (buffered.trim() !== '') await onEvent(JSON.parse(buffered) as DiffEvent);
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function readUrlState(): { revision: string | null; path: string | null } {
+  const params = new URLSearchParams(location.search);
+  return { revision: params.get('revision'), path: params.get('path') };
+}
+
+function setViewUrl(revision: Revision, path: string | null, push: boolean) {
+  const url = new URL(location.href);
+  url.searchParams.set('revision', revision.commit_id);
+  if (path == null) url.searchParams.delete('path');
+  else url.searchParams.set('path', path);
+  history[push ? 'pushState' : 'replaceState'](null, '', url);
+}
+
+function findRevision(revisions: Revision[], id: string): Revision | undefined {
+  return revisions.find((revision) => revision.commit_id.startsWith(id) || revision.change_id.startsWith(id));
+}
+
+async function restoreUrlState(
+  revisions: Revision[],
+  revisionButtons: Map<string, HTMLButtonElement>,
+) {
+  const state = readUrlState();
+  let revision = state.revision == null
+    ? revisions.find((candidate) => candidate.working_copy) ?? revisions[0]
+    : findRevision(revisions, state.revision);
+  if (revision == null && state.revision != null) {
+    revision = await fetchJson<Revision>(`/api/revisions/${encodeURIComponent(state.revision)}`);
+  }
+  if (revision == null) return;
+  currentMode = state.path == null ? 'browse' : 'changes';
+  syncModeButtons();
+  await selectRevision(revision, revisionButtons.get(revision.commit_id) ?? null, false);
 }
 
 function requiredElement<T extends HTMLElement = HTMLElement>(selector: string): T {

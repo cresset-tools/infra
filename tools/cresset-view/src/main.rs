@@ -1,16 +1,19 @@
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
+use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use clap::Parser;
-use futures::{AsyncReadExt, StreamExt, TryStreamExt};
+use futures::channel::mpsc;
+use futures::{AsyncReadExt, SinkExt, StreamExt, TryStreamExt};
 use jj_lib::backend::TreeValue;
 use jj_lib::commit::Commit;
 use jj_lib::config::StackedConfig;
@@ -23,6 +26,7 @@ use jj_lib::revset::{RevsetExpression, RevsetStreamExt};
 use jj_lib::settings::UserSettings;
 use jj_lib::workspace::{Workspace, default_working_copy_factories};
 use serde::{Deserialize, Serialize};
+use tower_http::compression::CompressionLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
@@ -137,14 +141,6 @@ struct TreePath {
 }
 
 #[derive(Serialize)]
-struct DiffResponse {
-    operation_id: String,
-    change_id: String,
-    commit_id: String,
-    files: Vec<FileDiff>,
-}
-
-#[derive(Serialize)]
 struct FileResponse {
     operation_id: String,
     change_id: String,
@@ -157,11 +153,27 @@ struct FileResponse {
 
 #[derive(Serialize)]
 struct FileDiff {
+    index: usize,
     path: String,
     before: Option<String>,
     after: Option<String>,
     conflicted: bool,
     binary: bool,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum DiffEvent {
+    Metadata {
+        operation_id: String,
+        change_id: String,
+        commit_id: String,
+        paths: Vec<String>,
+    },
+    File(FileDiff),
+    Error {
+        error: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -172,6 +184,11 @@ struct RevisionQuery {
 #[derive(Deserialize)]
 struct FileQuery {
     path: String,
+}
+
+#[derive(Deserialize)]
+struct DiffQuery {
+    path: Option<String>,
 }
 
 #[tokio::main]
@@ -196,11 +213,13 @@ async fn main() -> Result<()> {
         .route("/health", get(health))
         .route("/api/repository", get(repository))
         .route("/api/revisions", get(revisions))
+        .route("/api/revisions/{id}", get(revision))
         .route("/api/bookmarks", get(bookmarks))
         .route("/api/revisions/{id}/tree", get(tree))
         .route("/api/revisions/{id}/file", get(file))
         .route("/api/revisions/{id}/diff", get(diff))
         .fallback_service(static_files)
+        .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -291,6 +310,20 @@ async fn bookmarks(State(state): State<AppState>) -> Result<Json<BookmarkRespons
     Ok(Json(response))
 }
 
+async fn revision(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Revision>, AppError> {
+    let path = state.repository.as_ref().clone();
+    let response = run_jj(move || async move {
+        let loaded = load_repository(&path).await?;
+        let commit = resolve_visible_commit(loaded.repo.as_ref(), &id).await?;
+        revision_from_commit(loaded.repo.as_ref(), &commit)
+    })
+    .await?;
+    Ok(Json(response))
+}
+
 async fn tree(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
@@ -332,43 +365,112 @@ async fn tree(
 async fn diff(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
-) -> Result<Json<DiffResponse>, AppError> {
+    Query(query): Query<DiffQuery>,
+) -> Result<Response, AppError> {
     let path = state.repository.as_ref().clone();
-    let response = run_jj(move || async move {
+    let (loaded, commit, mut entries, paths, start_index) = run_jj(move || async move {
         let loaded = load_repository(&path).await?;
         let commit = resolve_visible_commit(loaded.repo.as_ref(), &id).await?;
         let before_tree = commit.parent_tree(loaded.repo.as_ref()).await?;
         let after_tree = commit.tree();
         let mut stream = before_tree.diff_stream(&after_tree, &EverythingMatcher);
-        let mut files = Vec::new();
-
+        let mut entries = Vec::new();
         while let Some(entry) = stream.next().await {
-            let path = entry.path.as_internal_file_string().to_owned();
-            let values = entry.values?;
-            let conflicted = !values.before.is_resolved() || !values.after.is_resolved();
-            let before = read_text_value(loaded.repo.as_ref(), &entry.path, values.before).await?;
-            let after = read_text_value(loaded.repo.as_ref(), &entry.path, values.after).await?;
-            let binary =
-                matches!(before, FileContents::Binary) || matches!(after, FileContents::Binary);
-
-            files.push(FileDiff {
-                path,
-                before: before.into_text(),
-                after: after.into_text(),
-                conflicted,
-                binary,
-            });
+            entries.push(entry);
         }
-
-        Ok(DiffResponse {
-            operation_id: loaded.repo.op_id().hex(),
-            change_id: commit.change_id().reverse_hex(),
-            commit_id: commit.id().hex(),
-            files,
-        })
+        let paths: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.path.as_internal_file_string().to_owned())
+            .collect();
+        let start_index = match query.path {
+            Some(requested_path) => paths
+                .iter()
+                .position(|path| path == &requested_path)
+                .ok_or_else(|| anyhow!("requested path is not changed in this revision"))?,
+            None => 0,
+        };
+        Ok((loaded, commit, entries, paths, start_index))
     })
     .await?;
-    Ok(Json(response))
+    let mut indexed_entries: Vec<_> = entries.drain(..).enumerate().collect();
+    indexed_entries.rotate_left(start_index);
+    let (mut sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(2);
+
+    tokio::task::spawn_blocking(move || {
+        pollster::block_on(async move {
+            let result = async {
+                send_diff_event(
+                    &mut sender,
+                    &DiffEvent::Metadata {
+                        operation_id: loaded.repo.op_id().hex(),
+                        change_id: commit.change_id().reverse_hex(),
+                        commit_id: commit.id().hex(),
+                        paths,
+                    },
+                )
+                .await?;
+
+                for (index, entry) in indexed_entries {
+                    let path = entry.path.as_internal_file_string().to_owned();
+                    let values = entry.values?;
+                    let conflicted = !values.before.is_resolved() || !values.after.is_resolved();
+                    let before =
+                        read_text_value(loaded.repo.as_ref(), &entry.path, values.before).await?;
+                    let after =
+                        read_text_value(loaded.repo.as_ref(), &entry.path, values.after).await?;
+                    let binary = matches!(before, FileContents::Binary)
+                        || matches!(after, FileContents::Binary);
+
+                    send_diff_event(
+                        &mut sender,
+                        &DiffEvent::File(FileDiff {
+                            index,
+                            path,
+                            before: before.into_text(),
+                            after: after.into_text(),
+                            conflicted,
+                            binary,
+                        }),
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+
+            if let Err(error) = result {
+                let message = format!("{error:#}");
+                if send_diff_event(
+                    &mut sender,
+                    &DiffEvent::Error {
+                        error: message.clone(),
+                    },
+                )
+                .await
+                .is_ok()
+                {
+                    tracing::warn!(error = %message, "diff stream failed");
+                }
+            }
+        });
+    });
+
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .header("x-accel-buffering", "no")
+        .body(Body::from_stream(receiver))?)
+}
+
+async fn send_diff_event(
+    sender: &mut mpsc::Sender<Result<Bytes, Infallible>>,
+    event: &DiffEvent,
+) -> Result<()> {
+    let mut line = serde_json::to_vec(event)?;
+    line.push(b'\n');
+    sender
+        .send(Ok(Bytes::from(line)))
+        .await
+        .map_err(|_| anyhow!("diff client disconnected"))
 }
 
 async fn file(
@@ -559,5 +661,30 @@ mod tests {
         );
         assert!(FileContents::Missing.into_text().is_none());
         assert!(FileContents::Binary.into_text().is_none());
+    }
+
+    #[test]
+    fn diff_file_event_is_flat_ndjson_record() {
+        let event = DiffEvent::File(FileDiff {
+            index: 3,
+            path: "src/main.rs".into(),
+            before: Some("old".into()),
+            after: Some("new".into()),
+            conflicted: false,
+            binary: false,
+        });
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "type": "file",
+                "index": 3,
+                "path": "src/main.rs",
+                "before": "old",
+                "after": "new",
+                "conflicted": false,
+                "binary": false,
+            })
+        );
     }
 }

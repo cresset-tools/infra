@@ -104,13 +104,14 @@ aside h2 strong { color: var(--text); font-size: 10px; font-weight: 500; letter-
 .signals .warning { color: var(--warning-text); background: var(--warning-bg); }
 
 #file-tree { height: calc(100% - 46px); overflow: hidden; }
-.detail { min-width: 0; overflow: auto; background: var(--page-bg); }
-.change-heading { position: sticky; top: 0; z-index: 5; padding: 19px 24px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--page-bg) 94%, transparent); backdrop-filter: blur(10px); }
+.detail { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--page-bg); }
+.change-heading { position: relative; z-index: 5; padding: 19px 24px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--page-bg) 94%, transparent); backdrop-filter: blur(10px); }
 .change-heading > div { display: flex; gap: 8px; align-items: baseline; color: var(--muted); font-size: 11px; text-transform: uppercase; }
 .change-heading code { color: var(--accent); }
 .change-heading h2 { margin-top: 8px; font-size: 18px; }
 .change-heading p { margin-top: 6px; color: var(--muted); font-size: 12px; }
-#content { display: grid; gap: 18px; padding: 22px; }
+#content { min-height: 0; overflow: auto; }
+#content > .empty-state { margin: 22px; }
 .empty-state { padding: 18px; color: var(--muted); border: 1px dashed var(--border); border-radius: 5px; }
 .file-view, .file-diff, .file-message { overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-bg); }
 .file-message > h3, .file-message > p, .file-diff > h3, .file-diff > p { padding: 14px; }
@@ -121,7 +122,7 @@ aside h2 strong { color: var(--text); font-size: 10px; font-weight: 500; letter-
   .workspace { grid-template-columns: 40% 60%; grid-template-rows: 38vh minmax(0, 1fr); height: calc(100vh - 84px); }
   .changes, .files { grid-row: 1; }
   .detail { grid-column: 1 / -1; grid-row: 2; }
-  #content { padding: 12px; }
+  #content > .empty-state { margin: 12px; }
 }
 
 @media (max-width: 620px) {
