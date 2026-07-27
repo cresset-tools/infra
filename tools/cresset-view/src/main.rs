@@ -143,6 +143,17 @@ struct DiffResponse {
 }
 
 #[derive(Serialize)]
+struct FileResponse {
+    operation_id: String,
+    change_id: String,
+    commit_id: String,
+    path: String,
+    contents: Option<String>,
+    conflicted: bool,
+    binary: bool,
+}
+
+#[derive(Serialize)]
 struct FileDiff {
     path: String,
     before: Option<String>,
@@ -154,6 +165,11 @@ struct FileDiff {
 #[derive(Deserialize)]
 struct RevisionQuery {
     limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct FileQuery {
+    path: String,
 }
 
 #[tokio::main]
@@ -180,6 +196,7 @@ async fn main() -> Result<()> {
         .route("/api/revisions", get(revisions))
         .route("/api/bookmarks", get(bookmarks))
         .route("/api/revisions/{id}/tree", get(tree))
+        .route("/api/revisions/{id}/file", get(file))
         .route("/api/revisions/{id}/diff", get(diff))
         .fallback_service(static_files)
         .layer(TraceLayer::new_for_http())
@@ -345,6 +362,38 @@ async fn diff(
             change_id: commit.change_id().reverse_hex(),
             commit_id: commit.id().hex(),
             files,
+        })
+    })
+    .await?;
+    Ok(Json(response))
+}
+
+async fn file(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<FileQuery>,
+) -> Result<Json<FileResponse>, AppError> {
+    let path = state.repository.as_ref().clone();
+    let response = run_jj(move || async move {
+        let loaded = load_repository(&path).await?;
+        let commit = resolve_visible_commit(loaded.repo.as_ref(), &id).await?;
+        let repo_path = RepoPath::from_internal_string(&query.path)?;
+        let value = commit.tree().path_value(repo_path).await?;
+        if value.is_absent() {
+            bail!("path does not exist in revision");
+        }
+        let conflicted = !value.is_resolved();
+        let contents = read_text_value(loaded.repo.as_ref(), repo_path, value).await?;
+        let binary = matches!(contents, FileContents::Binary);
+
+        Ok(FileResponse {
+            operation_id: loaded.repo.op_id().hex(),
+            change_id: commit.change_id().reverse_hex(),
+            commit_id: commit.id().hex(),
+            path: query.path,
+            contents: contents.into_text(),
+            conflicted,
+            binary,
         })
     })
     .await?;
