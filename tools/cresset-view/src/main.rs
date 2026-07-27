@@ -87,6 +87,7 @@ struct RepositoryResponse {
 #[derive(Serialize)]
 struct RevisionResponse {
     operation_id: String,
+    head_count: usize,
     revisions: Vec<Revision>,
 }
 
@@ -102,6 +103,7 @@ struct Revision {
     has_conflict: bool,
     divergent: bool,
     working_copy: bool,
+    is_head: bool,
     bookmarks: Vec<String>,
 }
 
@@ -256,6 +258,7 @@ async fn revisions(
 
         Ok(RevisionResponse {
             operation_id: loaded.repo.op_id().hex(),
+            head_count: loaded.repo.view().heads().len(),
             revisions,
         })
     })
@@ -489,6 +492,7 @@ fn revision_from_commit(repo: &ReadonlyRepo, commit: &Commit) -> Result<Revision
         has_conflict: commit.has_conflict(),
         divergent,
         working_copy: repo.view().is_wc_commit_id(commit.id()),
+        is_head: repo.view().heads().contains(commit.id()),
         bookmarks,
     })
 }

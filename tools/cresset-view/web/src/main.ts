@@ -12,11 +12,13 @@ interface Revision {
   has_conflict: boolean;
   divergent: boolean;
   working_copy: boolean;
+  is_head: boolean;
   bookmarks: string[];
 }
 
 interface RevisionsResponse {
   operation_id: string;
+  head_count: number;
   revisions: Revision[];
 }
 
@@ -59,6 +61,20 @@ interface FileResponse {
 type ViewMode = 'browse' | 'changes';
 type ThemePreference = 'auto' | 'light' | 'dark';
 
+interface GraphSegment {
+  fromLane: number;
+  toLane: number;
+  fromY: number;
+  toY: number;
+  colorLane: number;
+}
+
+interface GraphRow {
+  lane: number;
+  laneCount: number;
+  segments: GraphSegment[];
+}
+
 const app = document.querySelector<HTMLElement>('#app');
 if (app == null) throw new Error('missing app element');
 
@@ -86,7 +102,11 @@ app.innerHTML = `
   </header>
   <section class="workspace">
     <aside class="changes">
-      <h2>Revisions</h2>
+      <h2><span>Revisions</span><strong id="head-count"></strong></h2>
+      <label class="revision-pan">
+        <span>Pan topology</span>
+        <input id="revision-pan" type="range" min="0" value="0" aria-label="Pan revision topology">
+      </label>
       <div id="revision-list" class="revision-list"></div>
     </aside>
     <aside class="files">
@@ -104,6 +124,8 @@ app.innerHTML = `
 
 const operation = requiredElement('#operation');
 const revisionList = requiredElement('#revision-list');
+const headCount = requiredElement('#head-count');
+const revisionPan = requiredElement<HTMLInputElement>('#revision-pan');
 const fileTreeContainer = requiredElement('#file-tree');
 const fileHeading = requiredElement('#file-heading');
 const changeHeading = requiredElement('#change-heading');
@@ -136,26 +158,44 @@ syncModeButtons();
 
 const response = await fetchJson<RevisionsResponse>('/api/revisions?limit=150');
 operation.textContent = `operation ${short(response.operation_id)}`;
+headCount.textContent = `${response.head_count.toLocaleString()} heads`;
 const revisionButtons = new Map<string, HTMLButtonElement>();
+const graphRows = layoutRevisionGraph(response.revisions);
+const maxGraphLanes = Math.max(1, ...graphRows.map((row) => row.laneCount));
+const graphLaneGap = 14;
+const graphWidth = Math.ceil(24 + (maxGraphLanes - 1) * graphLaneGap);
 
-for (const revision of response.revisions) {
+for (const [index, revision] of response.revisions.entries()) {
   const button = document.createElement('button');
   button.className = 'revision';
+  button.style.setProperty('--graph-width', `${graphWidth}px`);
   button.innerHTML = `
-    <span class="revision-id">${revision.working_copy ? '@ · ' : ''}${escapeHtml(short(revision.change_id))}</span>
-    <strong>${escapeHtml(firstLine(revision.description) || '(no description)')}</strong>
-    <small>${escapeHtml(revision.author_name)} · ${formatDate(revision.authored_at)}</small>
-    <span class="signals">
-      ${revision.bookmarks.map((name) => `<em>${escapeHtml(name)}</em>`).join('')}
-      ${revision.working_copy ? '<em>@</em>' : ''}
-      ${revision.divergent ? '<em class="warning">divergent</em>' : ''}
-      ${revision.has_conflict ? '<em class="warning">conflict</em>' : ''}
+    ${renderRevisionGraph(graphRows[index], revision, graphWidth, graphLaneGap)}
+    <span class="revision-copy">
+      <span class="revision-id">${revision.working_copy ? '@ · ' : ''}${escapeHtml(short(revision.change_id))}</span>
+      <strong>${escapeHtml(firstLine(revision.description) || '(no description)')}</strong>
+      <small>${escapeHtml(revision.author_name)} · ${formatDate(revision.authored_at)}</small>
+      <span class="signals">
+        ${revision.bookmarks.map((name) => `<em>${escapeHtml(name)}</em>`).join('')}
+        ${revision.working_copy ? '<em>@</em>' : ''}
+        ${revision.is_head ? '<em class="head">head</em>' : ''}
+        ${revision.divergent ? '<em class="warning">divergent</em>' : ''}
+        ${revision.has_conflict ? '<em class="warning">conflict</em>' : ''}
+      </span>
     </span>
   `;
   button.addEventListener('click', () => void selectRevision(revision, button));
   revisionButtons.set(revision.commit_id, button);
   revisionList.append(button);
 }
+syncRevisionPanRange();
+revisionPan.addEventListener('input', () => {
+  revisionList.scrollLeft = Number(revisionPan.value);
+});
+revisionList.addEventListener('scroll', () => {
+  revisionPan.value = String(revisionList.scrollLeft);
+}, { passive: true });
+new ResizeObserver(syncRevisionPanRange).observe(revisionList);
 
 const initialRevision = response.revisions.find((revision) => revision.working_copy) ?? response.revisions[0];
 if (initialRevision != null) {
@@ -175,6 +215,13 @@ function syncModeButtons() {
     button.classList.toggle('selected', selected);
     button.setAttribute('aria-pressed', String(selected));
   }
+}
+
+function syncRevisionPanRange() {
+  const maximum = Math.max(0, revisionList.scrollWidth - revisionList.clientWidth);
+  revisionPan.max = String(maximum);
+  revisionPan.disabled = maximum === 0;
+  revisionPan.value = String(Math.min(maximum, revisionList.scrollLeft));
 }
 
 async function selectRevision(revision: Revision, button: HTMLButtonElement) {
@@ -355,6 +402,78 @@ function applyTheme(preference: ThemePreference) {
 function applyTreeTheme() {
   const colorScheme = themePreference === 'auto' ? 'light dark' : themePreference;
   tree?.getFileTreeContainer()?.style.setProperty('color-scheme', colorScheme);
+}
+
+function layoutRevisionGraph(revisions: Revision[]): GraphRow[] {
+  const lanes: Array<string | null> = [];
+  const rows: GraphRow[] = [];
+
+  for (const revision of revisions) {
+    let lane = lanes.indexOf(revision.commit_id);
+    const continuesFromAbove = lane >= 0;
+    if (lane < 0) {
+      lane = lanes.indexOf(null);
+      if (lane < 0) lane = lanes.length;
+      lanes[lane] = revision.commit_id;
+    }
+
+    const segments: GraphSegment[] = [];
+    for (let activeLane = 0; activeLane < lanes.length; activeLane += 1) {
+      if (activeLane !== lane && lanes[activeLane] != null) {
+        segments.push({ fromLane: activeLane, toLane: activeLane, fromY: 0, toY: 100, colorLane: activeLane });
+      }
+    }
+    if (continuesFromAbove) {
+      segments.push({ fromLane: lane, toLane: lane, fromY: 0, toY: 50, colorLane: lane });
+    }
+
+    lanes[lane] = null;
+    for (const [parentIndex, parentId] of revision.parent_commit_ids.entries()) {
+      let parentLane = lanes.indexOf(parentId);
+      if (parentLane < 0) {
+        parentLane = parentIndex === 0 && lanes[lane] == null ? lane : lanes.indexOf(null);
+        if (parentLane < 0) parentLane = lanes.length;
+        lanes[parentLane] = parentId;
+      }
+      segments.push({ fromLane: lane, toLane: parentLane, fromY: 50, toY: 100, colorLane: parentLane });
+    }
+
+    while (lanes.length > 0 && lanes.at(-1) == null) lanes.pop();
+    rows.push({ lane, laneCount: Math.max(lane + 1, lanes.length), segments });
+  }
+
+  return rows;
+}
+
+function renderRevisionGraph(row: GraphRow, revision: Revision, width: number, laneGap: number): string {
+  const paths = row.segments.map((segment) => {
+    const fromX = graphLaneX(segment.fromLane, laneGap);
+    const toX = graphLaneX(segment.toLane, laneGap);
+    const path = fromX === toX
+      ? `M ${fromX} ${segment.fromY} L ${toX} ${segment.toY}`
+      : `M ${fromX} ${segment.fromY} C ${fromX} 72, ${toX} 72, ${toX} ${segment.toY}`;
+    return `<path class="graph-line lane-${segment.colorLane % 8}" d="${path}" />`;
+  }).join('');
+  const nodeClasses = [
+    'graph-node',
+    `lane-${row.lane % 8}`,
+    revision.working_copy ? 'working-copy' : '',
+    revision.is_head ? 'head' : '',
+    revision.divergent ? 'divergent' : '',
+    revision.has_conflict ? 'conflict' : '',
+  ].filter(Boolean).join(' ');
+
+  return `
+    <span class="revision-graph" aria-hidden="true">
+      <svg viewBox="0 0 ${width} 100" preserveAspectRatio="none">${paths}</svg>
+      <span class="${nodeClasses}" style="left: ${graphLaneX(row.lane, laneGap)}px"></span>
+      ${revision.is_head ? `<span class="graph-head-label lane-${row.lane % 8}" style="left: ${graphLaneX(row.lane, laneGap) + 10}px">head</span>` : ''}
+    </span>
+  `;
+}
+
+function graphLaneX(lane: number, laneGap: number): number {
+  return 12 + lane * laneGap;
 }
 
 function pierreThemeType(): ThemeTypes {

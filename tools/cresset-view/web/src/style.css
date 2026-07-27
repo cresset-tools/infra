@@ -15,6 +15,14 @@
   --tag-text: light-dark(#465238, #bfc6ad);
   --warning-bg: light-dark(#f4dfbd, #49351e);
   --warning-text: light-dark(#7a4c0b, #f3c684);
+  --lane-0: light-dark(#4f7624, #a7c957);
+  --lane-1: light-dark(#236d84, #5bc0de);
+  --lane-2: light-dark(#8b5425, #e5a35b);
+  --lane-3: light-dark(#76519a, #bc8cff);
+  --lane-4: light-dark(#9a3f5f, #ef709d);
+  --lane-5: light-dark(#3f7770, #64c9b9);
+  --lane-6: light-dark(#8b7523, #dcc75b);
+  --lane-7: light-dark(#566a9b, #87a7ef);
 }
 
 :root[data-theme="light"] { color-scheme: light; }
@@ -50,19 +58,47 @@ h1 { font: 600 30px/1.05 Georgia, serif; letter-spacing: -0.04em; }
 
 .workspace {
   display: grid;
-  grid-template-columns: 300px 280px minmax(0, 1fr);
+  grid-template-columns: minmax(540px, 44vw) 280px minmax(0, 1fr);
   height: calc(100vh - 92px);
 }
 
 aside { min-height: 0; border-right: 1px solid var(--border); background: var(--panel-bg); }
-aside h2 { padding: 15px 18px; color: var(--muted); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; border-bottom: 1px solid var(--border-soft); }
-.revision-list { height: calc(100% - 46px); overflow: auto; }
-.revision { width: 100%; display: grid; gap: 5px; padding: 13px 18px; text-align: left; color: inherit; background: transparent; border: 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+aside h2 { min-height: 46px; display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; color: var(--muted); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; border-bottom: 1px solid var(--border-soft); }
+aside h2 strong { color: var(--text); font-size: 10px; font-weight: 500; letter-spacing: .04em; }
+.revision-pan { height: 34px; display: flex; gap: 10px; align-items: center; padding: 0 14px; color: var(--muted); border-bottom: 1px solid var(--border-soft); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+.revision-pan input { min-width: 0; flex: 1; accent-color: var(--accent); }
+.revision-pan input:disabled { opacity: .35; }
+.revision-list { height: calc(100% - 80px); overflow: auto; scrollbar-gutter: stable; }
+.revision { width: max(100%, calc(var(--graph-width) + 320px)); min-height: 78px; display: grid; grid-template-columns: var(--graph-width) 320px; padding: 0; text-align: left; color: inherit; background: var(--panel-bg); border: 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
 .revision:hover, .revision.selected { background: var(--selected-bg); }
 .revision.selected { box-shadow: inset 3px 0 var(--accent); }
+.revision-copy { position: sticky; right: 0; z-index: 2; min-width: 0; display: grid; align-content: center; gap: 5px; padding: 11px 14px; background: var(--panel-bg); border-left: 1px solid var(--border-soft); box-shadow: -12px 0 18px -18px #000; }
+.revision:hover .revision-copy, .revision.selected .revision-copy { background: var(--selected-bg); }
 .revision-id { color: var(--accent); font: 11px/1.2 "SFMono-Regular", monospace; }
-.revision strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.revision small { color: var(--muted); }
+.revision-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.revision-copy small { color: var(--muted); }
+.revision-graph { position: relative; min-width: var(--graph-width); align-self: stretch; overflow: hidden; }
+.revision-graph svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.graph-line { fill: none; stroke: currentColor; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.graph-node { position: absolute; top: 50%; width: 10px; height: 10px; border: 2px solid currentColor; border-radius: 50%; background: var(--panel-bg); transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--panel-bg); }
+.revision:hover .graph-node, .revision.selected .graph-node { background: var(--selected-bg); box-shadow: 0 0 0 2px var(--selected-bg); }
+.graph-node.working-copy { width: 14px; height: 14px; background: currentColor; box-shadow: inset 0 0 0 3px var(--panel-bg), 0 0 0 2px var(--panel-bg); }
+.revision:hover .graph-node.working-copy, .revision.selected .graph-node.working-copy { box-shadow: inset 0 0 0 3px var(--selected-bg), 0 0 0 2px var(--selected-bg); }
+.graph-node.divergent::after { content: ""; position: absolute; inset: 2px; border: 1px solid currentColor; border-radius: 50%; }
+.graph-node.conflict { border-radius: 2px; transform: translate(-50%, -50%) rotate(45deg); color: var(--warning-text); }
+.graph-node.head { box-shadow: 0 0 0 3px var(--panel-bg), 0 0 0 4px currentColor; }
+.revision:hover .graph-node.head, .revision.selected .graph-node.head { box-shadow: 0 0 0 3px var(--selected-bg), 0 0 0 4px currentColor; }
+.graph-head-label { position: absolute; top: 50%; padding: 2px 5px; border: 1px solid currentColor; border-radius: 2px; background: var(--panel-bg); transform: translateY(-50%); font: 9px/1 "SFMono-Regular", monospace; letter-spacing: .04em; text-transform: uppercase; }
+.revision:hover .graph-head-label, .revision.selected .graph-head-label { background: var(--selected-bg); }
+.signals .head { color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+.lane-0 { color: var(--lane-0); }
+.lane-1 { color: var(--lane-1); }
+.lane-2 { color: var(--lane-2); }
+.lane-3 { color: var(--lane-3); }
+.lane-4 { color: var(--lane-4); }
+.lane-5 { color: var(--lane-5); }
+.lane-6 { color: var(--lane-6); }
+.lane-7 { color: var(--lane-7); }
 .signals { display: flex; gap: 5px; flex-wrap: wrap; }
 .signals em { padding: 2px 5px; color: var(--tag-text); background: var(--tag-bg); border-radius: 2px; font-size: 10px; font-style: normal; }
 .signals .warning { color: var(--warning-text); background: var(--warning-bg); }
