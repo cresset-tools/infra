@@ -83,10 +83,17 @@ in
   # client_id as the JWT issuer; the installation id is discovered at runtime
   # (GET /app/installations) rather than stored.
   #
-  # NOTE: the cresset-sync crate does not yet implement GitHub App auth
-  # (JWT -> installation token -> git credential); these are wired ahead of that
-  # code. The read-only Milestone-1 rollout does not USE them at runtime, but
-  # sops-nix still decrypts them at activation.
+  # These credentials are live and verified end-to-end against the real API by
+  # operations/sync/tests/github_app_live.rs (run it with `--ignored`): the App mints
+  # an installation token good for 60 min, the installation reaches all 30 mapped
+  # repositories, and a `git push --dry-run` against cresset-tools/wick is accepted,
+  # so Contents: write is really granted.
+  #
+  # The git credential is HTTP **basic** auth with the `x-access-token` username, not
+  # Bearer: GitHub's REST API accepts Bearer but its *git* endpoints reject it with
+  # `remote: invalid credentials` — including on public repos, where a bad credential
+  # is refused outright instead of falling back to anonymous access. See
+  # repo.rs's GitCredential.
   #
   # The private key is a file secret (owned by the worker so it can read it); the
   # client id is rendered into an EnvironmentFile alongside a pointer to that file.
