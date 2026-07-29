@@ -48,6 +48,14 @@ let
     # rusqlite is `features = ["bundled"]`, so it compiles a vendored SQLite —
     # buildRustPackage's stdenv cc covers it; no system sqlite needed.
     nativeBuildInputs = [ pkgs.makeWrapper ];
+    # buildRustPackage runs the test suite in its check phase, and the fixture tests
+    # build real jj/Git repositories on disk — so the SAME pinned toolchain the wrapper
+    # puts on the runtime PATH has to be present at BUILD time too, or the build dies
+    # with "failed to spawn jj". The tests are hermetic (local temp repos, a throwaway
+    # JJ_CONFIG, explicit Git identities, no network), so they run happily in the
+    # sandbox once the binaries exist. The github_app_live.rs checks are #[ignore]d and
+    # stay skipped here — they need real credentials and deliberately hit GitHub.
+    nativeCheckInputs = [ pkgs.git pkgs.jujutsu ];
     postInstall = ''
       wrapProgram $out/bin/cresset-sync \
         --prefix PATH : ${lib.makeBinPath [ pkgs.git pkgs.jujutsu ]}

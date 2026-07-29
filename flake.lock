@@ -15,6 +15,21 @@
         "url": "https://flakehub.com/f/cresset-tools/bougie-relay/%2A.tar.gz"
       }
     },
+    "cresset-sync": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785310579,
+        "narHash": "sha256-CcBqh86qswv6HHMncxvwaf5H+skevUb19QAqTLjRoFM=",
+        "rev": "fc65d236300db2a550772bc8d4489000a61c2161",
+        "revCount": 13,
+        "type": "tarball",
+        "url": "https://api.flakehub.com/f/pinned/cresset-tools/cresset-sync/0.1.13%2Brev-fc65d236300db2a550772bc8d4489000a61c2161/019facde-7a96-7ce1-a085-52b314a203f1/source.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://flakehub.com/f/cresset-tools/cresset-sync/%2A.tar.gz"
+      }
+    },
     "deploy-rs": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -402,6 +417,7 @@
     "root": {
       "inputs": {
         "bougie-relay": "bougie-relay",
+        "cresset-sync": "cresset-sync",
         "deploy-rs": "deploy-rs",
         "determinate": "determinate",
         "disko": "disko",
