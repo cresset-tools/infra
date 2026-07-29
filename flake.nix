@@ -34,13 +34,22 @@
       flake = false;
     };
     # The cresset-sync worker, distributed the SAME way as bougie-relay: the
-    # monorepo's CI publishes operations/sync as a private FlakeHub artifact
-    # (GitHub OIDC), and hosts/internal builds it via buildRustPackage. `flake
-    # = false`: it's a plain Cargo project kept a source input, so the crate
-    # stays monorepo-internal (no cresset-tools/* repo) while remaining
-    # buildable from the standalone cresset-tools/infra clone.
-    # NOTE: this input resolves only once the monorepo CI publish job exists;
-    # until then `nix flake lock`/`metadata` cannot fetch it.
+    # PRIVATE cresset-tools/cresset-sync repo publishes itself to FlakeHub from
+    # its own flakehub-push workflow (GitHub OIDC), and hosts/internal builds it
+    # via buildRustPackage. `flake = false`: it's a plain Cargo project kept a
+    # source input, so it stays buildable from the standalone cresset-tools/infra
+    # clone without an SSH deploy key.
+    #
+    # That repo is a publication mirror of `operations/sync` in the canonical
+    # monorepo, exported by the worker itself — the source of truth is the
+    # monorepo, not GitHub. Publishing has to originate from a GitHub repository
+    # because flakehub-push authenticates over GitHub Actions OIDC; private repo
+    # + private artifact keeps the worker as internal as that allows.
+    #
+    # NOTE: this input resolves only once that repo exists and has published at
+    # least once; until then `nix flake lock`/`metadata` cannot fetch it — which
+    # blocks evaluation of EVERY host in this flake, not just internal. See the
+    # bootstrap runbook in the monorepo's docs/SYNC_WORKER.md.
     cresset-sync = {
       url = "https://flakehub.com/f/cresset-tools/cresset-sync/*.tar.gz";
       flake = false;
