@@ -14,10 +14,14 @@
 #   /srv/git/cresset.git         canonical bare repo (git-canonical.nix) — advanced LOCALLY
 #   /srv/sync/state.db           SQLite checkpoint DB (authoritative)
 #   /srv/sync/mirrors/           per-repo bare Git mirrors of the downstreams
+#   /srv/sync/jj-workspace/      jj metadata only — attached to the canonical store
 #
-# There is exactly ONE copy of the monorepo here — the canonical bare repo above is
-# also what the worker reads and advances. It shells out only to `git`, so it never
-# needed a jj repo or a working copy of its own.
+# There is exactly ONE copy of the monorepo here. The canonical bare repo above is
+# also what the worker reads and advances, and the jj workspace it merges in is
+# ATTACHED to that same object store rather than cloning it: `jj git init
+# --git-repo=` plus `--ignore-working-copy` on every command means jj never checks
+# anything out, so the workspace holds `.jj` bookkeeping and nothing else. A
+# materialized Magento-sized tree there would have silently undone that.
 #
 # A `git` pack/repack spike is the realistic OOM risk on a shared box, so this
 # module also lands memory GUARDRAILS: zram swap PLUS a disk swapfile on the /srv
@@ -46,7 +50,9 @@ let
   #
   # The worker SHELLS OUT to pinned git/jj (Resolved "jj library crate vs. CLI";
   # SYNC_WORKER.md security rules), so wrap the binary to put THIS build's git +
-  # jujutsu on its PATH — the deployment package owns the pinned toolchain.
+  # jujutsu on its PATH — the deployment package owns the pinned toolchain. `jj` is a
+  # genuine runtime dependency now, not just a build-time one: imports replay through
+  # `jj rebase` so that conflicts are recorded structurally rather than as marker text.
   cresset-sync = pkgs.rustPlatform.buildRustPackage {
     pname = "cresset-sync";
     version = "0.1.0";
