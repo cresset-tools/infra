@@ -14,7 +14,10 @@
 #   /srv/git/cresset.git         canonical bare repo (git-canonical.nix) — advanced LOCALLY
 #   /srv/sync/state.db           SQLite checkpoint DB (authoritative)
 #   /srv/sync/mirrors/           per-repo bare Git mirrors of the downstreams
-#   /srv/sync/monorepo/          colocated jj/Git working clone the worker reads
+#
+# There is exactly ONE copy of the monorepo here — the canonical bare repo above is
+# also what the worker reads and advances. It shells out only to `git`, so it never
+# needed a jj repo or a working copy of its own.
 #
 # A `git` pack/repack spike is the realistic OOM risk on a shared box, so this
 # module also lands memory GUARDRAILS: zram swap PLUS a disk swapfile on the /srv
@@ -27,7 +30,11 @@ let
   user = "cresset-sync";
   syncDir = "/srv/sync";
   stateDb = "${syncDir}/state.db";            # mirrors dir is derived as <db-parent>/mirrors
-  workClone = "${syncDir}/monorepo";          # --repo-root: the jj/Git clone the worker reads
+  # ONE copy of the monorepo on this host. The worker reads and advances the canonical bare
+  # repository directly as its --repo-root: it only ever spawns `git`, so it never needed a jj
+  # repo or a working copy, and `.sync/projects.toml` is read out of the commit being
+  # reconciled rather than off disk. There is deliberately no separate working clone to seed,
+  # keep in sync, or let go stale.
   canonicalRepo = "/srv/git/cresset.git";     # advanced locally (co-located, no SSH round-trip)
 
   # Consume the worker as a FlakeHub artifact, the SAME mechanism as
@@ -135,14 +142,11 @@ in
     };
     script = ''
       set -euo pipefail
+      # Only the worker's own state lives here: the checkpoint DB, the per-repo
+      # downstream mirrors, and the lease lock. The monorepo itself is the canonical
+      # bare repo (git-canonical.nix) — there is no working clone to provision, which
+      # also means no manual seeding step before the first pass can run.
       install -d -o ${user} -g ${user} -m 0750 ${syncDir} ${syncDir}/mirrors
-      # The colocated jj/Git working clone the worker reads (--repo-root). It is
-      # SEEDED ONCE by the operator after the canonical repo has content, e.g.:
-      #   sudo -u ${user} jj git clone ${canonicalRepo} ${workClone}
-      # (kept a manual bootstrap step — a fresh canonical repo is empty, so an
-      # automatic clone here would fail on day zero). Just ensure the parent is
-      # writable by the worker.
-      install -d -o ${user} -g ${user} -m 0750 ${workClone}
     '';
   };
 
@@ -184,14 +188,16 @@ in
       EnvironmentFile = [ "-${config.sops.templates."cresset-sync.env".path}" ];
       # Read-only Milestone-1: bare `run`, NO `--apply` (see the block above). To
       # enable mutation once the read-only rollout is verified, append
-      # `--apply --export-project <id>`. `--canonical-repo` is already wired so the
-      # import phase has the local canonical repo to advance the moment `--apply`
-      # lands; it is unused by the read-only pass.
+      # `--apply --export-project <id>`.
+      #
+      # `--repo-root` is the canonical bare repo itself, and `--canonical-repo` is
+      # deliberately absent: it defaults to the same store, which is the point — the
+      # import advances the very ref the export then plans against, so there is no
+      # window in which the two can disagree.
       ExecStart = ''
         ${cresset-sync}/bin/cresset-sync \
-          --repo-root ${workClone} \
+          --repo-root ${canonicalRepo} \
           --db ${stateDb} \
-          --canonical-repo ${canonicalRepo} \
           run
       '';
       # ---- GUARDRAIL: bound the worker cgroup ----
