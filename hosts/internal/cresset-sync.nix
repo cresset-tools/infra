@@ -129,6 +129,29 @@ in
   # client_id is a non-file scalar pulled in only for the template placeholder above.
   sops.secrets."github_app/client_id" = { owner = user; };
 
+  # ---- Conflict-resolving agent ----
+  # Automated resolution shells out to the Claude Code CLI, which authenticates as a
+  # LOGGED-IN SESSION rather than an API key. Two consequences, both operational:
+  #
+  #   - the CLI is not in nixpkgs (only an unrelated ACP adapter is), so it is installed
+  #     out of band and the worker is told where to find it — it is deliberately not
+  #     wrapped onto the binary's PATH, so a missing agent degrades to "attempt failed →
+  #     escalate to a human" instead of silently changing how conflicts are handled;
+  #   - someone runs `claude login` ONCE per host as the ${user} user. Credentials land in
+  #     $HOME/.claude/.credentials.json and are refreshed in place, so that directory must
+  #     stay writable — it does, since HOME is ${syncDir} and ReadWritePaths covers it.
+  #     `ProtectHome = true` looks like it would block this but does not: it hides /home,
+  #     /root and /run/user, and this user's home is under /srv.
+  #
+  # A lapsed login surfaces as a failed attempt, which escalates exactly like any other
+  # agent failure. That is the correct degradation — synchronization pauses and somebody is
+  # told — but it is discovered at conflict time, not before.
+  #
+  # The agent runs with `--safe-mode`, which disables CLAUDE.md, hooks, plugins, MCP and
+  # custom agents while leaving auth alone. That matters beyond determinism: a CLAUDE.md
+  # arriving inside the very repository content being merged would otherwise steer the
+  # resolver, which is prompt injection rather than a hypothesis.
+
   # ---- /srv working-data provisioning ----
   # /srv is the Hetzner Cloud Volume, mounted with `nofail` (so it is excluded
   # from local-fs.target's requires set). Exactly like origin's /srv-dependent
