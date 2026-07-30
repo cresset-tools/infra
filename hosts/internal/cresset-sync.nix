@@ -161,10 +161,17 @@ in
   # READ-ONLY MILESTONE-1 ROLLOUT: bare `run` (below) performs NO mutation — no
   # pushes, no `main` advances — exactly like `reconcile --dry-run`, exiting 0. It
   # exercises the checkpoint + tree-equality core against the live downstreams
-  # without touching them. Once the read-only rollout is verified, an operator
-  # enables mutation by appending `--apply --export-project <id>` to ExecStart
-  # (Milestone 2 is gated to a single low-risk repo; `--apply` without the required
-  # `--export-project` gating refuses, exactly like a non-dry-run `reconcile`).
+  # without touching them.
+  #
+  # Enabling mutation is TWO independent steps, deliberately: append `--apply` to
+  # ExecStart, and turn projects on one at a time with
+  # `cresset-sync enable <project>`. The enable switch is durable state, defaults to
+  # off for every project, and is never overwritten by a checkpoint write — so
+  # `--apply` on its own synchronises nothing and says so, rather than starting on
+  # all thirty-one repositories at once. `cresset-sync disable <project>` is the
+  # emergency per-project pause. (Legacy note: `--apply --export-project <id>`
+  # still restricts a pass to one project regardless of its switch, for targeted
+  # operator runs.)
   systemd.services.cresset-sync = {
     description = "cresset-sync: converge monorepo main with cresset-tools/* GitHub repos";
     # No wantedBy = multi-user.target — the timer owns activation (like the
