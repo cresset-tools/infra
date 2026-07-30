@@ -235,6 +235,61 @@ in
     };
   };
 
+  # ---- Dead-man's switch ----
+  # The reconcile unit going red only catches a pass that RAN and failed. It cannot catch the
+  # timer being masked, the box being wedged, or /srv being unmounted — and because one blocked
+  # project pauses every project, a silent stall is indistinguishable from convergence.
+  #
+  # `health` reads durable state only (no remotes, no lease) and exits non-zero when no pass has
+  # completed recently or any project is blocked. Running it on its own timer means the failure
+  # shows up in `systemctl --failed` and the journal without needing the worker to be alive to
+  # report it. Choosing a push channel — mail, ntfy, an external check-in — is a fleet-wide
+  # decision, so this deliberately stops at "the unit is red", which is at least discoverable.
+  systemd.services.cresset-sync-health = {
+    description = "cresset-sync liveness/health check (durable state only)";
+    after = [ "srv.mount" ];
+    requires = [ "cresset-sync-setup.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      User = user;
+      Group = user;
+      RequiresMountsFor = "/srv";
+      # Threshold is generous relative to the 5-minute reconcile cadence: several consecutive
+      # missed or failing passes, not a single hiccup, is what should page anyone.
+      ExecStart = ''
+        ${cresset-sync}/bin/cresset-sync \
+          --repo-root ${canonicalRepo} \
+          --db ${stateDb} \
+          health --max-age-secs 1800
+      '';
+      NoNewPrivileges = true;
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      PrivateTmp = true;
+      # Read-only: it inspects state, it never advances anything. The SQLite WAL still needs
+      # write access to the database directory, so this is not ReadOnlyPaths.
+      ReadWritePaths = [ syncDir ];
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectControlGroups = true;
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+      RestrictNamespaces = true;
+      LockPersonality = true;
+      SystemCallArchitectures = "native";
+      SystemCallFilter = [ "@system-service" "~@privileged" ];
+    };
+  };
+
+  systemd.timers.cresset-sync-health = {
+    description = "Check cresset-sync liveness every 15 minutes";
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = "*:0/15";
+      Persistent = true;
+      RandomizedDelaySec = "60s";
+    };
+  };
+
   systemd.timers.cresset-sync = {
     description = "Drive the cresset-sync reconciliation loop every 5 minutes";
     wantedBy = [ "timers.target" ];
