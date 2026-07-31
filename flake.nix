@@ -80,6 +80,32 @@
           rust-overlay.overlays.default
         ];
       };
+      # The flakeref the deploy/switch apps hand to nixos-anywhere/nixos-rebuild.
+      #
+      # These apps embed a store path rather than `.#` so they work from any working
+      # directory (see the `deploy` app below). Getting that right in the monorepo took
+      # two goes, because a store path is NOT usable as a flakeref when the flake sits
+      # in a subdirectory:
+      #
+      #   nix ... '/nix/store/<hash>-source/operations/infra#internal'
+      #   error: installable '/nix/store/<hash>-source' does not correspond to a
+      #          Nix language value
+      #
+      # Nix normalises any path under /nix/store back to its store ROOT and silently
+      # drops the subpath, so `${self}` — which does point at the subdirectory — loses
+      # exactly the part that matters. The subdirectory has to be carried as `?dir=`
+      # on an explicit `path:` ref instead. This is what killed the first `internal`
+      # deploy, after kexec but before disko, so nothing was lost but the wall time.
+      #
+      # `sourceInfo.outPath` is the reliable discriminator: it is always the store root
+      # of the copied source, whatever `self.outPath` happens to be. A standalone
+      # cresset-tools/infra clone has flake.nix there; the monorepo does not.
+      srcRoot = self.sourceInfo.outPath;
+      selfFlake =
+        if builtins.pathExists (srcRoot + "/flake.nix")
+        then "path:${srcRoot}"
+        else "path:${srcRoot}?dir=operations/infra";
+
       # Every directory under ./hosts/ becomes a nixosConfigurations entry.
       # Each host dir must contain configuration.nix; disko.nix is optional
       # (omit on hosts where the disk layout was set up another way).
@@ -175,7 +201,7 @@
             fi
             host="$1"; target="$2"; shift 2
             exec ${nixos-anywhere.packages.${system}.default}/bin/nixos-anywhere \
-              --flake "${self}#$host" \
+              --flake "${selfFlake}#$host" \
               --target-host "root@$target" \
               --print-build-logs \
               "$@"
@@ -198,7 +224,7 @@
             fi
             host="$1"; target="$2"; shift 2
             exec ${pkgs.nixos-rebuild}/bin/nixos-rebuild switch \
-              --flake "${self}#$host" \
+              --flake "${selfFlake}#$host" \
               --target-host "root@$target" \
               --build-host "root@$target" \
               --use-substitutes \
