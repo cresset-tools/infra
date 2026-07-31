@@ -140,9 +140,9 @@ in
   # The message itself is deliberately a pointer — project, operation, a COUNT of conflicted
   # paths, and a cresset-view link — never file contents or diffs. Telegram is a third party,
   # and this is the same reasoning that ruled out GitHub issues for conflict reporting.
-  # NOT YET PRESENT in secrets/internal.yaml — activation will fail until they are added:
-  #   sops secrets/internal.yaml   # add telegram: {bot_token: ..., chat_id: ...}
-  # Creating the bot and reading its chat id is an operator step; there is nothing to generate.
+  # Verified end to end against the real bot: `cresset-sync notify-test` sends a message
+  # shaped exactly like a real escalation, so a wrong token or chat id surfaces immediately
+  # rather than the first time something actually breaks.
   sops.secrets."telegram/bot_token" = { owner = user; };
   sops.secrets."telegram/chat_id" = { owner = user; };
   # client_id is a non-file scalar pulled in only for the template placeholder above.
