@@ -124,8 +124,27 @@ in
     content = ''
       GITHUB_APP_CLIENT_ID=${config.sops.placeholder."github_app/client_id"}
       GITHUB_APP_PRIVATE_KEY_FILE=${config.sops.secrets."github_app/private_key".path}
+      TELEGRAM_BOT_TOKEN=${config.sops.placeholder."telegram/bot_token"}
+      TELEGRAM_CHAT_ID=${config.sops.placeholder."telegram/chat_id"}
     '';
   };
+
+  # ---- Operator notification (sops) ----
+  # One Telegram message when a conflict genuinely needs a human, and the same channel for the
+  # liveness check — a dead-man's switch and a conflict escalation should not be two mechanisms.
+  #
+  # If these are absent the worker still blocks, records and reports the conflict; it just says
+  # so on stderr instead of sending. That is a legitimate deployment, not a broken one, so a
+  # missing token never fails a pass.
+  #
+  # The message itself is deliberately a pointer — project, operation, a COUNT of conflicted
+  # paths, and a cresset-view link — never file contents or diffs. Telegram is a third party,
+  # and this is the same reasoning that ruled out GitHub issues for conflict reporting.
+  # NOT YET PRESENT in secrets/internal.yaml — activation will fail until they are added:
+  #   sops secrets/internal.yaml   # add telegram: {bot_token: ..., chat_id: ...}
+  # Creating the bot and reading its chat id is an operator step; there is nothing to generate.
+  sops.secrets."telegram/bot_token" = { owner = user; };
+  sops.secrets."telegram/chat_id" = { owner = user; };
   # client_id is a non-file scalar pulled in only for the template placeholder above.
   sops.secrets."github_app/client_id" = { owner = user; };
 
