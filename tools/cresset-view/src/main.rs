@@ -340,6 +340,13 @@ fn read_sync_state(path: &Path) -> SyncResponse {
         Err(e) => return unavailable(&format!("cannot open {}: {e}", path.display())),
     };
 
+    // Wait briefly for a contended read, then give up. Deliberately much shorter than the
+    // worker's own timeout: this is serving an HTTP request, and an unavailable panel is a far
+    // better outcome than a page that hangs because a WAL checkpoint is in progress.
+    if let Err(e) = conn.busy_timeout(std::time::Duration::from_millis(750)) {
+        return unavailable(&format!("cannot configure the reader: {e}"));
+    }
+
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
