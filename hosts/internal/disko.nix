@@ -1,10 +1,11 @@
 { ... }:
 let
-  # TODO: REPLACE_WITH_HETZNER_VOLUME_ID — the Hetzner Cloud Volume's numeric
-  # ID for the /srv volume attached to `internal`. Visible in the Hetzner Cloud
-  # console URL when viewing the volume, or via `hcloud volume list`. Mirrors the
-  # `volumeId` placeholder in hosts/origin/disko.nix. For example: 102934857.
-  volumeId = "REPLACE_WITH_HETZNER_VOLUME_ID";
+  # The Hetzner Cloud Volume backing /srv on `internal` (`hcloud volume describe
+  # internal-srv`). 20 GB: the module declares a 4 GB swapfile on this volume, and the
+  # canonical repo plus 31 downstream mirrors sit alongside it, so a 10 GB volume would be
+  # roughly half consumed at rest — with a git repack spike, the very failure the memory
+  # guardrails exist for, writing into the same space.
+  volumeId = "106511468";
 in
 {
   disko.devices.disk = {

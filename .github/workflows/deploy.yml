@@ -50,6 +50,8 @@ jobs:
           - { host: bougie-relay, runner: ubuntu-latest }
           - { host: bougierepo, runner: ubuntu-latest }
           - { host: telemetry, runner: ubuntu-latest }
+          # internal is x86_64 (hosts/internal/system), so a standard runner builds it.
+          - { host: internal, runner: ubuntu-latest }
           # origin is aarch64 → build natively on a free public-repo arm runner
           - { host: origin, runner: ubuntu-24.04-arm }
     steps:
