@@ -187,12 +187,56 @@ in
     recommendedGzipSettings = true;
     recommendedProxySettings = true;
 
+    # Unknown Host -> drop the connection. This IP is recycled: nsk-test.werktoej.dk,
+    # a previous tenant's name, still resolves here, so third-party traffic arrives
+    # under hostnames we do not serve. Without a default server those requests fall
+    # through to the FIRST vhost, which is the identity provider — they were landing
+    # on Authentik. 444 closes the connection without a response.
+    virtualHosts."_" = {
+      default = true;
+      rejectSSL = true;
+      locations."/".return = "444";
+    };
+
     virtualHosts."auth.cresset.tools" = {
       enableACME = true;
       forceSSL = true;
       locations."/" = {
         proxyPass = "http://127.0.0.1:9000";
         proxyWebsockets = true;
+      };
+
+      # Authentik's initial-setup flow is UNAUTHENTICATED by construction: it is the
+      # bootstrap that creates the superuser, so whoever reaches it first owns the
+      # instance. Between a host coming up and someone completing that flow, a public
+      # identity provider is claimable by anyone — and this box was being swept by
+      # Censys, zgrab and Tor exits within hours of its certificate hitting the CT log.
+      #
+      # A longer prefix wins in nginx, so these two locations override "/" above and
+      # confine the flow — both its UI entry point and the API the UI drives it
+      # through — to loopback. Run the setup over an SSH tunnel:
+      #
+      #   ssh -L 9000:127.0.0.1:9000 root@internal.cresset.tools
+      #   open http://localhost:9000/if/flow/initial-setup/
+      #
+      # This is a stop-gap for a race, not a fix for it. The fix is to never leave the
+      # instance claimable: set AUTHENTIK_BOOTSTRAP_PASSWORD from sops so akadmin has a
+      # password the moment the database is created, which retires this flow for good.
+      locations."/if/flow/initial-setup/" = {
+        proxyPass = "http://127.0.0.1:9000";
+        extraConfig = ''
+          allow 127.0.0.1;
+          allow ::1;
+          deny all;
+        '';
+      };
+      locations."/api/v3/flows/executor/initial-setup/" = {
+        proxyPass = "http://127.0.0.1:9000";
+        extraConfig = ''
+          allow 127.0.0.1;
+          allow ::1;
+          deny all;
+        '';
       };
     };
 
