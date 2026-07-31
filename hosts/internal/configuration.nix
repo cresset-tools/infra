@@ -167,7 +167,13 @@ in
     };
   };
 
-  environment.systemPackages = [ cressetView ];
+  # git and jujutsu are here for the OPERATOR, not for any service: every unit that
+  # needs them already carries its own `path`, and cresset-sync's wrapper pins its own
+  # copies deliberately. But this is the box that hosts the canonical monorepo remote,
+  # and inspecting it during bring-up (`show-ref`, `cat-file`, `log`) meant hunting the
+  # binary out of /nix/store by hand — on the one host where reaching for git is the
+  # obvious thing to do.
+  environment.systemPackages = [ cressetView pkgs.git pkgs.jujutsu ];
 
   security.acme = {
     acceptTerms = true;
@@ -207,6 +213,22 @@ in
           auth_request_set $authentik_username $upstream_http_x_authentik_username;
           auth_request_set $authentik_groups $upstream_http_x_authentik_groups;
           auth_request_set $authentik_email $upstream_http_x_authentik_email;
+
+          # FAIL CLOSED. `auth_request` alone is not a gate here: Authentik's embedded
+          # outpost answers 200 for a host it has no provider configured for, so between
+          # this vhost going live and the proxy provider being created in the Authentik
+          # UI, every anonymous request was approved. That is not hypothetical — it is
+          # what happened on first provision, and the whole private monorepo was served
+          # to the internet until the viewer was stopped.
+          #
+          # A 200 from the outpost is therefore not proof of authentication; an identity
+          # header is. Authentik only sets X-authentik-username once a request has really
+          # been authorised, so an empty one means "not authenticated" or "not configured"
+          # — and both must be refused. An unconfigured gate now returns 403 instead of
+          # the repository.
+          if ($authentik_username = "") {
+            return 403 "authentication is not configured for this host";
+          }
 
           proxy_set_header X-authentik-username $authentik_username;
           proxy_set_header X-authentik-groups $authentik_groups;
