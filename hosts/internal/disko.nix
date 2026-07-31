@@ -5,6 +5,10 @@ let
   # canonical repo plus 31 downstream mirrors sit alongside it, so a 10 GB volume would be
   # roughly half consumed at rest — with a git repack spike, the very failure the memory
   # guardrails exist for, writing into the same space.
+  #
+  # STALE: this id belonged to the first `internal`, which was torn down along with its
+  # volume. Provisioning against it would fail at disko on a device that does not exist.
+  # Replace it with the new volume's id (`hcloud volume create`) before the next deploy.
   volumeId = "106511468";
 in
 {
