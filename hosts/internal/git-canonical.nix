@@ -32,6 +32,45 @@ let
   # account even before the per-key restrictions below.
   gitShell = "${pkgs.git}/bin/git-shell";
 
+
+  # Protect `main` — and ONLY `main` — from rewrites and deletion.
+  #
+  # The export model rests on `main` moving forward only. A checkpoint is a pair
+  # `(downstream SHA, monorepo commit)`, and it is meaningless the moment that monorepo
+  # commit stops being an ancestor of `main`; since the worker never force-pushes a
+  # downstream branch, it cannot repair such a history, it can only behave strangely.
+  #
+  # The blunt tool for this — `receive.denyNonFastForwards` — would be a mistake here. jj
+  # rewrites commits as a matter of course: amending a change during review produces new
+  # commit ids, so re-pushing a feature bookmark for a second round of review is inherently
+  # a non-fast-forward. Refusing those globally would break exactly the multi-round internal
+  # review the monorepo exists to support, in order to protect a single ref.
+  #
+  # So: a hook that constrains `refs/heads/main` and leaves every other ref alone. Rewrite
+  # feature bookmarks as much as you like; land on `main` once, forward.
+  protectMain = pkgs.writeShellScript "cresset-canonical-update-hook" ''
+    set -eu
+    ref="$1"; old="$2"; new="$3"
+    zero=0000000000000000000000000000000000000000
+
+    [ "$ref" = "refs/heads/main" ] || exit 0
+
+    if [ "$new" = "$zero" ]; then
+      echo "refusing to delete $ref: it is the canonical branch the synchronizer exports from" >&2
+      exit 1
+    fi
+    if [ "$old" = "$zero" ]; then
+      exit 0
+    fi
+    if ! git merge-base --is-ancestor "$old" "$new"; then
+      echo "refusing to rewrite $ref: $old is not an ancestor of $new." >&2
+      echo "Every exported checkpoint anchors a commit on this branch, and the synchronizer" >&2
+      echo "never force-pushes downstream, so a rewrite here cannot be undone there." >&2
+      echo "Rewrite freely on a feature bookmark; land on main only by fast-forward." >&2
+      exit 1
+    fi
+  '';
+
   # Belt-and-braces per-key hardening: even though git-shell already blocks
   # everything but push/pull, disable the ssh side channels too.
   restrict = "restrict";
@@ -102,6 +141,15 @@ in
         # `main` is the canonical default branch (matches the monorepo bookmark).
         git -C ${bareRepo} symbolic-ref HEAD refs/heads/main
       fi
+
+      # Installed unconditionally, not only at creation, so a repository made before this
+      # protection existed picks it up on the next deploy.
+      install -d -o git -g git -m 0755 ${bareRepo}/hooks
+      # COPIED, not symlinked. Git treats an unreadable or dangling hook exactly like an absent
+      # one — silently, with no error and no rejection — so a link into a store path that ever
+      # went missing would disable this protection without anyone noticing. A copy cannot dangle,
+      # and re-installing it on every activation keeps it current.
+      install -o git -g git -m 0755 ${protectMain} ${bareRepo}/hooks/update
 
       # Belt-and-braces: keep the whole tree git-owned across redeploys (a push
       # or the local worker advance may have created objects as `git`).
