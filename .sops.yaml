@@ -7,7 +7,7 @@ keys:
   - &host_demo age1un7lute5hqsx7lgj8hrx26xj58pn9jhnz7w3m6huv2l3ttrj7g7qj5fcw0
   - &host_relay age1wvf6v3dssj7ql78f74mmfs7mnnzpd9fxwendyv08w47uf3slzqqqk9xr0x
   - &host_bougierepo age1ukydq282r3lk35gnrmnmudwxkspe8vg2qvrj8euj7dz5mkvqddlq9aw9jm
-  - &host_internal age103k5048s740wmgpeuhjqvkmyah8mqhzm5mn002my5v3j5eph2dvq7098wg
+  - &host_internal age1kqsfs0a3m6v53tka6jzmypua269qpxy7ldl2sk9z5zk5ma2xf55smkp8qw
 creation_rules:
   - path_regex: secrets/demo(\.ya?ml|/[^/]+)$
     key_groups:

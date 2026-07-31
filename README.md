@@ -63,14 +63,31 @@ Add a new host: `mkdir hosts/<name>` + `configuration.nix` + (optional)
 
 ### Internal host bootstrap
 
-The host's pre-generated SSH identity is stored outside the repository at
-`~/.config/sops/internal-host/`. Plant it as
-`/etc/ssh/ssh_host_ed25519_key` during `nixos-anywhere` provisioning so the host
-can decrypt `secrets/internal.yaml`.
+`secrets/internal.yaml` is encrypted to this host's *own* SSH host key, so the
+key has to exist before the host does. It is generated on the operator's machine
+and planted during provisioning; it is deliberately not in the repository, since
+`operations/infra` is published to a public mirror.
 
-Before provisioning, create DNS A records for `internal.cresset.tools`,
-`auth.cresset.tools`, and `code.cresset.tools`, all pointing to the new server.
-Then install the host and complete Authentik's initial setup at:
+The key and a ready-made `--extra-files` tree live outside the repository at
+`~/.config/cresset-infra/hostkeys/internal/`. **Back that directory up.** Losing
+it does not lose the secrets — both admin age keys still decrypt them — but it
+does mean re-keying (`sops updatekeys`) before the host can be rebuilt.
+
+The `--extra-files` tree is copied onto the target's `/` before first boot, and
+`nixos-anywhere` chowns it to root; the `0600` mode on the private key is what
+must be preserved locally, or sshd will refuse it.
+
+DNS A records for `internal.cresset.tools`, `auth.cresset.tools`, and
+`code.cresset.tools` must resolve to the server before provisioning — the host
+issues its own certificates over ACME HTTP-01, so the records are DNS-only
+rather than proxied. Then install:
+
+```sh
+nix run .#deploy -- internal <ip> \
+  --extra-files ~/.config/cresset-infra/hostkeys/internal/extra-files
+```
+
+Complete Authentik's initial setup at:
 
 ```text
 https://auth.cresset.tools/if/flow/initial-setup/
