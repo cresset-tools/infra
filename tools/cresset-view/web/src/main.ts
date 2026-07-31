@@ -113,6 +113,7 @@ app.innerHTML = `
       <code id="operation">loading operation</code>
     </div>
   </header>
+  <div id="sync-banner" class="sync-banner" hidden></div>
   <section class="workspace">
     <aside class="changes">
       <h2><span>Revisions</span><strong id="head-count"></strong></h2>
@@ -135,6 +136,7 @@ app.innerHTML = `
   </section>
 `;
 
+const syncBanner = requiredElement('#sync-banner');
 const operation = requiredElement('#operation');
 const revisionList = requiredElement('#revision-list');
 const headCount = requiredElement('#head-count');
@@ -174,6 +176,9 @@ for (const button of modeButtons) {
 syncModeButtons();
 
 void initialize();
+// Independent of the main load: the banner must not delay the viewer, and a worker that is
+// absent or unreachable must not stop the repository rendering.
+void renderSyncStatus();
 
 async function initialize() {
   const response = await fetchJson<RevisionsResponse>('/api/revisions?limit=150');
@@ -698,4 +703,78 @@ function escapeHtml(value: string): string {
   const node = document.createElement('span');
   node.textContent = value;
   return node.innerHTML;
+}
+
+
+// ---------------------------------------------------------------------------
+// Synchronization status.
+//
+// cresset-sync pauses EVERY project when one conflicts, so a stall is easy to miss: nothing
+// looks broken, work simply stops flowing. This banner is the standing reminder, and it appears
+// only when there is something to say — a repository viewer should not carry a permanent green
+// bar telling you nothing is wrong.
+// ---------------------------------------------------------------------------
+
+interface SyncProject {
+  id: string;
+  status: string;
+  enabled: boolean;
+  last_error?: string;
+  conflict_operation_id?: string;
+  conflict_commit?: string;
+}
+
+interface SyncResponse {
+  available: boolean;
+  unavailable_reason?: string;
+  last_pass_age_secs?: number;
+  projects: SyncProject[];
+  incomplete_operations: number;
+}
+
+/** Beyond this, a fleet that should reconcile every five minutes has stopped. */
+const STALE_AFTER_SECONDS = 1800;
+
+async function renderSyncStatus(): Promise<void> {
+  let sync: SyncResponse;
+  try {
+    sync = await fetchJson<SyncResponse>('/api/sync');
+  } catch {
+    // The worker is optional and this panel is secondary; never let it break the viewer.
+    return;
+  }
+  if (!sync.available) return;
+
+  const blocked = sync.projects.filter((project) => project.status === 'blocked');
+  const stale =
+    sync.last_pass_age_secs != null && sync.last_pass_age_secs > STALE_AFTER_SECONDS;
+  if (blocked.length === 0 && !stale) return;
+
+  const parts: string[] = [];
+  if (blocked.length > 0) {
+    parts.push(
+      `<strong>${blocked.length === 1 ? '1 project is' : `${blocked.length} projects are`} blocked</strong>` +
+        ' — synchronization is paused for every project until this is resolved.',
+    );
+    for (const project of blocked) {
+      const link =
+        project.conflict_commit != null
+          ? `<a href="?revision=${encodeURIComponent(project.conflict_commit)}">${escapeHtml(project.id)}</a>`
+          : escapeHtml(project.id);
+      const resolve =
+        project.conflict_operation_id != null
+          ? ` <code>cresset-sync resolve ${escapeHtml(project.conflict_operation_id)} --jj-commit &lt;sha&gt;</code>`
+          : '';
+      parts.push(`<div class="sync-project">${link}${resolve}</div>`);
+    }
+  }
+  if (stale) {
+    const minutes = Math.floor((sync.last_pass_age_secs ?? 0) / 60);
+    parts.push(
+      `<div class="sync-project">No reconciliation pass has completed for ${minutes} minutes.</div>`,
+    );
+  }
+
+  syncBanner.innerHTML = parts.join('');
+  syncBanner.hidden = false;
 }

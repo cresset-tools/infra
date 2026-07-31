@@ -90,6 +90,11 @@ in
   };
   users.groups.${user} = { };
 
+  # cresset-view reads the checkpoint database to show which projects are blocked and how stale
+  # the fleet is — the panel the Telegram escalation's link lands beside. Group membership is
+  # what grants that; the viewer opens the database read-only and can never write it.
+  users.users.cresset-view.extraGroups = [ user ];
+
   # ---- GitHub App credentials (sops-nix) ----
   # Read/write Contents on the 30 downstream repos. Declared here (the module
   # that consumes them); the host-wide sops defaults (defaultSopsFile,

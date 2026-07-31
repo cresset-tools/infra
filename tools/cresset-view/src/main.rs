@@ -43,6 +43,14 @@ struct Args {
     #[arg(long, env = "CRESSET_VIEW_LISTEN", default_value = "127.0.0.1:8080")]
     listen: String,
 
+    /// The cresset-sync checkpoint database, read read-only to surface synchronization state.
+    ///
+    /// Optional on purpose. cresset-view is a repository viewer first; the worker may not be
+    /// deployed, may not have run yet, or may be on another host. Its absence removes a panel,
+    /// it does not break the service.
+    #[arg(long, env = "CRESSET_VIEW_SYNC_DB")]
+    sync_db: Option<PathBuf>,
+
     #[arg(long)]
     check: bool,
 }
@@ -50,6 +58,7 @@ struct Args {
 #[derive(Clone)]
 struct AppState {
     repository: Arc<PathBuf>,
+    sync_db: Option<Arc<PathBuf>>,
 }
 
 #[derive(Debug)]
@@ -205,6 +214,7 @@ async fn main() -> Result<()> {
     }
     let state = AppState {
         repository: Arc::new(args.repository),
+        sync_db: args.sync_db.map(Arc::new),
     };
     let index = args.assets.join("index.html");
     let static_files = ServeDir::new(&args.assets).not_found_service(ServeFile::new(index));
@@ -215,6 +225,7 @@ async fn main() -> Result<()> {
         .route("/api/revisions", get(revisions))
         .route("/api/revisions/{id}", get(revision))
         .route("/api/bookmarks", get(bookmarks))
+        .route("/api/sync", get(sync_status))
         .route("/api/revisions/{id}/tree", get(tree))
         .route("/api/revisions/{id}/file", get(file))
         .route("/api/revisions/{id}/diff", get(diff))
@@ -239,6 +250,178 @@ async fn shutdown_signal() {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+// ---------------------------------------------------------------------------
+// Synchronization status.
+//
+// The worker is a timer oneshot, so nothing is listening between passes and its state cannot be
+// asked for over a socket — it lives in SQLite. Reading it here is what turns a Telegram
+// notification's deep link into something worth following: the operator lands on the conflicted
+// revision AND can see which projects are blocked, how stale the fleet is, and why.
+//
+// Read-only in every sense. This endpoint opens the database read-only, never writes, and never
+// fails the service: if the worker is not deployed, has not run, or its database cannot be read,
+// the panel reports itself unavailable and the viewer carries on being a repository viewer.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct SyncResponse {
+    /// False when there is no database to read. The frontend hides the panel rather than
+    /// showing an alarming empty one.
+    available: bool,
+    /// Why it is unavailable, when it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unavailable_reason: Option<String>,
+    /// Seconds since a pass last completed, which is the fleet's liveness signal: it grows
+    /// whether the worker is blocked, crashed, or simply never fired.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_pass_age_secs: Option<i64>,
+    projects: Vec<SyncProject>,
+    incomplete_operations: usize,
+}
+
+#[derive(Serialize)]
+struct SyncProject {
+    id: String,
+    /// `ready`, `conflict` or `blocked` — what the worker discovered.
+    status: String,
+    /// Whether an operator has turned synchronization on for this project. Distinct from
+    /// `status`: one is a decision, the other is a finding.
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    downstream_head_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    monorepo_commit_id: Option<String>,
+    /// For a blocked project this names the conflict bookmark and the `resolve` invocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+    /// The operation awaiting resolution, if any — what `cresset-sync resolve` takes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conflict_operation_id: Option<String>,
+    /// The conflicted commit, so the UI can link straight to it.
+    ///
+    /// A commit id specifically, not the `sync/conflict/*` bookmark: this viewer resolves
+    /// revisions by change or commit id prefix and would reject a bookmark name outright. The
+    /// Telegram escalation links the same way for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conflict_commit: Option<String>,
+}
+
+async fn sync_status(State(state): State<AppState>) -> Json<SyncResponse> {
+    let Some(path) = state.sync_db.clone() else {
+        return Json(unavailable("no synchronization database is configured"));
+    };
+    // Blocking SQLite work off the async runtime.
+    let response = tokio::task::spawn_blocking(move || read_sync_state(path.as_ref()))
+        .await
+        .unwrap_or_else(|e| unavailable(&format!("reading synchronization state panicked: {e}")));
+    Json(response)
+}
+
+fn unavailable(reason: &str) -> SyncResponse {
+    SyncResponse {
+        available: false,
+        unavailable_reason: Some(reason.to_string()),
+        last_pass_age_secs: None,
+        projects: Vec::new(),
+        incomplete_operations: 0,
+    }
+}
+
+fn read_sync_state(path: &Path) -> SyncResponse {
+    // Read-only: this process must never be able to alter the worker's authoritative state, and
+    // opening it this way makes that structural rather than a matter of discipline.
+    let conn = match rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(conn) => conn,
+        Err(e) => return unavailable(&format!("cannot open {}: {e}", path.display())),
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let last_pass_age_secs = conn
+        .query_row(
+            "SELECT value FROM sync_meta WHERE key = 'last_pass_completed_at'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|at| now.saturating_sub(at));
+
+    let conflicts = read_open_conflicts(&conn).unwrap_or_default();
+    let mut projects = read_projects(&conn).unwrap_or_default();
+    for project in &mut projects {
+        if let Some((operation_id, commit)) = conflicts.get(&project.id) {
+            project.conflict_operation_id = Some(operation_id.clone());
+            project.conflict_commit = commit.clone();
+        }
+    }
+    let incomplete_operations = conn
+        .query_row(
+            "SELECT COUNT(*) FROM operation WHERE state NOT IN ('committed', 'failed')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0) as usize;
+
+    SyncResponse {
+        available: true,
+        unavailable_reason: None,
+        last_pass_age_secs,
+        projects,
+        incomplete_operations,
+    }
+}
+
+fn read_projects(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<SyncProject>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, status, enabled, downstream_head_sha, monorepo_commit_id, last_error
+         FROM project ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(SyncProject {
+            id: row.get(0)?,
+            status: row.get(1)?,
+            enabled: row.get::<_, i64>(2).unwrap_or(0) != 0,
+            downstream_head_sha: row.get(3)?,
+            monorepo_commit_id: row.get(4)?,
+            last_error: row.get(5)?,
+            conflict_operation_id: None,
+            conflict_commit: None,
+        })
+    })?;
+    rows.collect()
+}
+
+/// The import operation each project is currently stuck on, with the conflicted commit.
+///
+/// Newest first, so a project that has somehow accumulated more than one shows the live one.
+fn read_open_conflicts(
+    conn: &rusqlite::Connection,
+) -> rusqlite::Result<BTreeMap<String, (String, Option<String>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT project_id, id, result_jj_commit_id FROM operation
+         WHERE kind = 'import' AND state NOT IN ('committed', 'failed')
+         ORDER BY created_at DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            (row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?),
+        ))
+    })?;
+    let mut out = BTreeMap::new();
+    for row in rows {
+        let (project, entry) = row?;
+        out.entry(project).or_insert(entry);
+    }
+    Ok(out)
 }
 
 async fn repository(State(state): State<AppState>) -> Result<Json<RepositoryResponse>, AppError> {
@@ -661,6 +844,93 @@ mod tests {
         );
         assert!(FileContents::Missing.into_text().is_none());
         assert!(FileContents::Binary.into_text().is_none());
+    }
+
+    /// A missing or unreadable synchronization database degrades to an unavailable panel, never
+    /// to a failed request.
+    ///
+    /// cresset-view is a repository viewer first. The worker may not be deployed, may not have
+    /// run yet, or may live on another host; none of that should cost anyone the ability to look
+    /// at the monorepo.
+    #[test]
+    fn an_absent_sync_database_is_reported_not_fatal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let response = read_sync_state(&tmp.path().join("nonexistent.db"));
+
+        assert!(!response.available, "an absent database is unavailable");
+        assert!(
+            response.unavailable_reason.is_some(),
+            "and it says why, rather than looking like an empty fleet"
+        );
+        assert!(response.projects.is_empty());
+    }
+
+    /// The panel reports what an operator needs to act: which projects are blocked and why, which
+    /// are actually enabled, and how long since a pass completed.
+    #[test]
+    fn sync_state_reports_blocked_projects_and_staleness() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (
+                 id TEXT PRIMARY KEY, config_hash TEXT, downstream_head_sha TEXT,
+                 monorepo_commit_id TEXT, status TEXT NOT NULL DEFAULT 'ready',
+                 last_error TEXT, enabled INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE operation (
+                 id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL,
+                 state TEXT NOT NULL);
+             CREATE TABLE sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO project (id, status, enabled, last_error)
+                 VALUES ('wick', 'blocked', 1, 'import conflict parked on sync/conflict/wick/op1');
+             INSERT INTO project (id, status, enabled) VALUES ('jibs', 'ready', 1);
+             INSERT INTO project (id, status, enabled) VALUES ('sconce', 'ready', 0);
+             INSERT INTO operation (id, project_id, kind, state)
+                 VALUES ('op1', 'wick', 'import', 'applied');
+             INSERT INTO operation (id, project_id, kind, state)
+                 VALUES ('op0', 'wick', 'export', 'committed');
+             INSERT INTO sync_meta (key, value)
+                 VALUES ('last_pass_completed_at', CAST(unixepoch() - 900 AS TEXT));",
+        )
+        .unwrap();
+        drop(conn);
+
+        let response = read_sync_state(&path);
+        assert!(response.available);
+
+        let age = response.last_pass_age_secs.expect("a pass has completed");
+        assert!(
+            (890..=910).contains(&age),
+            "the age is what distinguishes converged from stalled, got {age}"
+        );
+
+        let blocked: Vec<_> = response
+            .projects
+            .iter()
+            .filter(|p| p.status == "blocked")
+            .collect();
+        assert_eq!(blocked.len(), 1, "one project is blocked");
+        assert!(
+            blocked[0]
+                .last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("sync/conflict/wick/op1")),
+            "the conflict bookmark must reach the operator: {:?}",
+            blocked[0].last_error
+        );
+
+        // `enabled` is an operator decision and `status` is a worker finding; conflating them
+        // would hide a project that is simply switched off.
+        let disabled: Vec<_> = response.projects.iter().filter(|p| !p.enabled).collect();
+        assert_eq!(disabled.len(), 1);
+        assert_eq!(disabled[0].id, "sconce");
+        assert_eq!(
+            disabled[0].status, "ready",
+            "switched off is not the same as unhealthy"
+        );
+
+        // Only unfinished work counts: a committed operation is not outstanding.
+        assert_eq!(response.incomplete_operations, 1);
     }
 
     #[test]

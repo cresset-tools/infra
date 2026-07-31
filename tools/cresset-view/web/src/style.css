@@ -134,3 +134,27 @@ aside h2 strong { color: var(--text); font-size: 10px; font-weight: 500; letter-
   .files { height: 32vh; border-bottom: 1px solid var(--border); }
   .detail { height: 60vh; }
 }
+
+/* Synchronization status.
+   Only rendered when a project is blocked or the fleet has gone stale, so it is styled to be
+   noticed rather than to blend in — a paused fleet is easy to miss precisely because nothing
+   looks broken. */
+.sync-banner {
+  margin: 0 var(--gutter, 1rem) 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid color-mix(in oklab, #d9822b 60%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, #d9822b 12%, transparent);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.sync-banner .sync-project {
+  margin-top: 0.35rem;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.85rem;
+}
+
+.sync-banner code {
+  user-select: all;
+}

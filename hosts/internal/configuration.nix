@@ -140,7 +140,18 @@ in
     serviceConfig = {
       User = "cresset-view";
       Group = "cresset-view";
-      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080";
+      # --sync-db surfaces cresset-sync's state: which projects are blocked, why, and how long
+      # since a pass completed. It is optional and read READ-ONLY; if the worker is not
+      # deployed, has not run, or the database cannot be opened, the panel reports itself
+      # unavailable and the viewer carries on being a repository viewer.
+      #
+      # CAVEAT worth knowing before debugging this: the checkpoint database is in WAL mode, and
+      # a read-only SQLite connection to a WAL database generally needs the `-shm` index, which
+      # in turn wants write access to the directory. Reads may therefore fail while the worker
+      # holds it, and that is deliberately survivable rather than fatal. If it proves flaky in
+      # practice, the fix is for the worker to write a small JSON snapshot after each pass and
+      # for this to read that instead — a plain file read has none of these problems.
+      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080 --sync-db /srv/sync/state.db";
       Restart = "on-failure";
       RestartSec = "3s";
       NoNewPrivileges = true;
@@ -148,7 +159,10 @@ in
       PrivateDevices = true;
       ProtectHome = true;
       ProtectSystem = "strict";
-      ReadOnlyPaths = [ "/var/lib/cresset-view/repository/current" ];
+      ReadOnlyPaths = [ "/var/lib/cresset-view/repository/current" "/srv/sync" ];
+      # /srv is a nofail Cloud Volume, so the viewer must not be held up by it: the sync panel
+      # degrades on its own if the path is absent.
+      RequiresMountsFor = "/srv";
       RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
     };
   };
