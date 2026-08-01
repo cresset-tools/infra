@@ -5,17 +5,28 @@ let
   # canonical repo plus 31 downstream mirrors sit alongside it, so a 10 GB volume would be
   # roughly half consumed at rest — with a git repack spike, the very failure the memory
   # guardrails exist for, writing into the same space.
+  volumeId = "106515963";
+
+  # The local system disk, addressed by its stable /dev/disk/by-id path for the SAME
+  # reason the Cloud Volume below is: /dev/sdX enumeration is not stable. That is not
+  # theoretical here — on the rebuilt host the volume came up as /dev/sda and the local
+  # disk as /dev/sdb, the reverse of the first install.
   #
-  # STALE: this id belonged to the first `internal`, which was torn down along with its
-  # volume. Provisioning against it would fail at disko on a device that does not exist.
-  # Replace it with the new volume's id (`hcloud volume create`) before the next deploy.
-  volumeId = "106511468";
+  # The running system never cared (fstab mounts everything by partlabel), but disko
+  # DOES: it formats whatever `device` names. With a bare /dev/sda this module was one
+  # coin flip away from installing the OS onto the 20 GB volume and putting /srv on the
+  # system disk — and re-provisioning an existing host that way would destroy the very
+  # volume all durable state lives on.
+  #
+  # Like volumeId, this is per-server (the serial is the QEMU disk's) and must be
+  # refreshed when the machine is rebuilt: `ls -l /dev/disk/by-id | grep QEMU`.
+  mainDiskId = "scsi-0QEMU_QEMU_HARDDISK_124275528";
 in
 {
   disko.devices.disk = {
     main = {
       type = "disk";
-      device = "/dev/sda";
+      device = "/dev/disk/by-id/${mainDiskId}";
       content = {
         type = "gpt";
         partitions = {
