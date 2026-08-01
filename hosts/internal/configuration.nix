@@ -15,6 +15,10 @@ let
     AUTHENTIK_LISTEN__DEBUG_PY = "127.0.0.1:9901";
     AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS = "127.0.0.0/8,::1/128";
     AUTHENTIK_OUTPOSTS__DISCOVER = "false";
+    # Identifies the bootstrapped superuser. Not a secret, so it stays here rather than
+    # in the env file below; on its own it does nothing, since authentik only runs the
+    # bootstrap when a password, hash or token is also present.
+    AUTHENTIK_BOOTSTRAP_EMAIL = "jelle@pingiun.com";
     HOME = "/var/lib/authentik";
   };
   authentikService = command: {
@@ -36,6 +40,11 @@ let
       ProtectHome = true;
       ProtectSystem = "strict";
       ReadWritePaths = [ "/var/lib/authentik" ];
+      # The bootstrap credential, which CANNOT be passed the way AUTHENTIK_SECRET_KEY is:
+      # authentik/core/setup/signals.py reads it with a plain os.getenv, so it gets none
+      # of the `file://` expansion the config loader gives other settings. It has to
+      # arrive as a literal value, hence an EnvironmentFile rendered by sops.
+      EnvironmentFile = [ config.sops.templates."authentik-bootstrap.env".path ];
     };
   };
 in
@@ -93,6 +102,41 @@ in
     owner = "authentik";
     group = "authentik";
     mode = "0400";
+  };
+
+  # ---- Make the bootstrap unclaimable ----
+  # authentik's initial-setup flow is unauthenticated by construction: it is what
+  # creates the superuser, so on a publicly reachable instance whoever finds it first
+  # owns the identity provider. The first `internal` sat in exactly that state, and the
+  # journal showed Censys, zgrab and Tor exits sweeping it within hours of its
+  # certificate appearing in the CT log.
+  #
+  # Restricting the flow at the proxy only narrows the race. Setting a bootstrap
+  # credential removes it: akadmin gets this password the moment the database is
+  # created, so the instance is never in a claimable state -- not on first boot, and
+  # not on any future rebuild. The setup flow is then refused by authentik's own policy
+  # rather than by us, and there is no window for a human to lose.
+  #
+  # This is the plaintext password rather than AUTHENTIK_BOOTSTRAP_PASSWORD_HASH (which
+  # authentik also accepts, via `ak hash_password`). The hash would keep the plaintext
+  # off the box entirely, but a human still has to type this at a login form, so it
+  # would have to live in sops regardless -- and /run/secrets on this host already holds
+  # the GitHub App private key, so a leak there is not survivable by hiding one value.
+  #
+  # Read it with:
+  #   sops -d --extract '["authentik"]["bootstrap_password"]' secrets/internal.yaml
+  sops.secrets."authentik/bootstrap_password" = {
+    owner = "authentik";
+    group = "authentik";
+    mode = "0400";
+  };
+  sops.templates."authentik-bootstrap.env" = {
+    owner = "authentik";
+    group = "authentik";
+    mode = "0400";
+    content = ''
+      AUTHENTIK_BOOTSTRAP_PASSWORD=${config.sops.placeholder."authentik/bootstrap_password"}
+    '';
   };
 
   users.groups.authentik = { };
