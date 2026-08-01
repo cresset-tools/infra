@@ -237,7 +237,16 @@ in
   # and inspecting it during bring-up (`show-ref`, `cat-file`, `log`) meant hunting the
   # binary out of /nix/store by hand — on the one host where reaching for git is the
   # obvious thing to do.
-  environment.systemPackages = [ cressetView pkgs.git pkgs.jujutsu ];
+  # claude-code carries an unfree licence. Allow that ONE package by name rather than
+  # setting allowUnfree globally: this flake has no unfree packages anywhere else, and a
+  # blanket flag would silently permit the next one too.
+  nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "claude-code";
+
+  # claude-code is here so `claude auth login` can be run once as the cresset-sync user
+  # (see cresset-sync.nix). Being on the PATH does NOT enable the resolver: the worker
+  # only dispatches an agent when `run` is given --agent-command, which ExecStart
+  # deliberately omits. Installing it and enabling it stay separate decisions.
+  environment.systemPackages = [ cressetView pkgs.git pkgs.jujutsu pkgs.claude-code ];
 
   security.acme = {
     acceptTerms = true;

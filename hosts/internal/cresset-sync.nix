@@ -157,11 +157,20 @@ in
   # Automated resolution shells out to the Claude Code CLI, which authenticates as a
   # LOGGED-IN SESSION rather than an API key. Two consequences, both operational:
   #
-  #   - the CLI is not in nixpkgs (only an unrelated ACP adapter is), so it is installed
-  #     out of band and the worker is told where to find it — it is deliberately not
-  #     wrapped onto the binary's PATH, so a missing agent degrades to "attempt failed →
+  #   - the CLI IS packaged now, as pkgs.claude-code. An earlier note here said it was not
+  #     in nixpkgs, which was true when this was written and is no longer. configuration.nix
+  #     puts it on the system PATH, but it is still deliberately NOT wrapped onto the worker
+  #     binary's PATH: the resolver runs only when `run` is given --agent-command, which
+  #     ExecStart omits, so a missing or unconfigured agent degrades to "attempt failed →
   #     escalate to a human" instead of silently changing how conflicts are handled;
-  #   - someone runs `claude login` ONCE per host as the ${user} user. Credentials land in
+  #   - someone runs `claude auth login` ONCE per host as the ${user} user (the subcommand
+  #     is `claude auth login`; a bare `claude login` is not a thing):
+  #
+  #       ssh -t root@internal.cresset.tools 'sudo -u ${user} -H claude auth login'
+  #
+  #     `-H` is the part that matters: it points HOME at ${syncDir}, which is where the
+  #     worker looks. The account's nologin shell is not an obstacle, because sudo execs
+  #     the command directly rather than through a login shell. Credentials land in
   #     $HOME/.claude/.credentials.json and are refreshed in place, so that directory must
   #     stay writable — it does, since HOME is ${syncDir} and ReadWritePaths covers it.
   #     `ProtectHome = true` looks like it would block this but does not: it hides /home,
