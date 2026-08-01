@@ -21,12 +21,32 @@ let
     AUTHENTIK_BOOTSTRAP_EMAIL = "jelle@pingiun.com";
     HOME = "/var/lib/authentik";
   };
-  authentikService = command: {
+  # The worker binds listeners too, from the SAME AUTHENTIK_LISTEN__* settings as the
+  # server. Sharing one environment therefore had the two units racing for the same
+  # ports, and the worker usually won:
+  #
+  #   authentik-server: "listen tcp 127.0.0.1:9000: bind: address already in use"
+  #
+  # The server then fell back to HTTPS on 9443 and a unix socket under /dev/shm, which
+  # PrivateTmp=true makes invisible to nginx. So nginx's proxy_pass to 9000 reached the
+  # WORKER, which answers every path with 200 and an empty body -- a blank page at
+  # auth.cresset.tools, and a 200 status that made it look healthy from the outside.
+  #
+  # Give the worker its own ports so the server deterministically owns the ones nginx
+  # proxies to, rather than leaving it to whichever unit starts first.
+  workerListenOverrides = {
+    AUTHENTIK_LISTEN__HTTP = "127.0.0.1:9010";
+    AUTHENTIK_LISTEN__HTTPS = "127.0.0.1:9453";
+    AUTHENTIK_LISTEN__METRICS = "127.0.0.1:9310";
+    AUTHENTIK_LISTEN__DEBUG = "127.0.0.1:9910";
+    AUTHENTIK_LISTEN__DEBUG_PY = "127.0.0.1:9911";
+  };
+  authentikService = command: extraEnv: {
     wantedBy = [ "multi-user.target" ];
     after = [ "network-online.target" "postgresql.service" "postgresql-setup.service" ];
     requires = [ "postgresql.service" "postgresql-setup.service" ];
     wants = [ "network-online.target" ];
-    environment = authentikEnvironment;
+    environment = authentikEnvironment // extraEnv;
     serviceConfig = {
       User = "authentik";
       Group = "authentik";
@@ -167,8 +187,8 @@ in
     startAt = "*-*-* 04:30:00 UTC";
   };
 
-  systemd.services.authentik-server = authentikService "server";
-  systemd.services.authentik-worker = authentikService "worker";
+  systemd.services.authentik-server = authentikService "server" { };
+  systemd.services.authentik-worker = authentikService "worker" workerListenOverrides;
 
   systemd.tmpfiles.rules = [
     "d /var/lib/cresset-view 0750 cresset-view cresset-view -"
