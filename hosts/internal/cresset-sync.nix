@@ -197,10 +197,15 @@ in
     requires = [ "srv.mount" ];
     before = [ "cresset-sync.service" ];
     path = [ pkgs.coreutils ];
+    # RequiresMountsFor is a [Unit] directive. It sat in serviceConfig until systemd was
+    # caught rejecting it -- "Unknown key 'RequiresMountsFor' in section [Service],
+    # ignoring" -- so this guard was silently absent on every unit that declared it. The
+    # /srv gating held anyway, on `requires = [ "srv.mount" ]`; this restores the second
+    # layer it was always meant to have.
+    unitConfig.RequiresMountsFor = "/srv";
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      RequiresMountsFor = "/srv";
     };
     script = ''
       set -euo pipefail
@@ -220,20 +225,36 @@ in
   # timer (matches the design's "periodic reconciliation loop; webhooks are only
   # latency hints").
   #
-  # READ-ONLY MILESTONE-1 ROLLOUT: bare `run` (below) performs NO mutation — no
-  # pushes, no `main` advances — exactly like `reconcile --dry-run`, exiting 0. It
-  # exercises the checkpoint + tree-equality core against the live downstreams
-  # without touching them.
+  # ROLLOUT STATE: `--apply` is on, every project is still off, and the resolver runs
+  # in suggest-only mode. Those are three independent switches on purpose.
   #
-  # Enabling mutation is TWO independent steps, deliberately: append `--apply` to
-  # ExecStart, and turn projects on one at a time with
-  # `cresset-sync enable <project>`. The enable switch is durable state, defaults to
-  # off for every project, and is never overwritten by a checkpoint write — so
-  # `--apply` on its own synchronises nothing and says so, rather than starting on
-  # all thirty-one repositories at once. `cresset-sync disable <project>` is the
-  # emergency per-project pause. (Legacy note: `--apply --export-project <id>`
-  # still restricts a pass to one project regardless of its switch, for targeted
-  # operator runs.)
+  # `--apply` opts into the state-mutating import+export path, but it synchronises
+  # NOTHING on its own: `enable` is durable per-project state that defaults to off, so
+  # the pass covers exactly the projects turned on with `cresset-sync enable <project>`
+  # and says so when that set is empty. That is what makes it safe to land this switch
+  # before any project is enabled, rather than flipping both at once and starting on all
+  # thirty-one repositories together. `cresset-sync disable <project>` is the emergency
+  # per-project pause. (`--apply --export-project <id>` still restricts a pass to one
+  # project regardless of its switch, for targeted operator runs.)
+  #
+  # `--agent-command` turns on automated conflict resolution. It is only meaningful
+  # alongside `--apply`: the resolution policy is constructed solely on the `--apply`
+  # branch, and a read-only pass never produces a conflict to resolve, so passing it
+  # without `--apply` would be inert. The path is the absolute store path rather than
+  # bare `claude`, pinning the exact build this deployment ships — the same reasoning
+  # that pins git and jujutsu on the wrapper, and it keeps the resolver from silently
+  # changing version underneath a running host.
+  #
+  # `--agent-apply` is deliberately ABSENT, which is what makes this suggest-only: an
+  # accepted candidate is recorded and reported, never published. A bad resolution
+  # reaching `main` is recoverable; the export that follows publishes it to a repository
+  # the worker never force-pushes, and that is not. Add the flag once the recorded
+  # candidates have been read and trusted.
+  #
+  # Attempts and timeout keep their defaults (2 attempts, 600s each). Every candidate
+  # still goes through conflict::resolve, which applies exactly the checks a human's
+  # resolution gets — conflict-free, tree-safe, inside its envelope — so a refusal is
+  # the system working. Nothing the agent returns is taken on trust.
   systemd.services.cresset-sync = {
     description = "cresset-sync: converge monorepo main with cresset-tools/* GitHub repos";
     # No wantedBy = multi-user.target — the timer owns activation (like the
@@ -243,6 +264,12 @@ in
     # in 5 minutes.
     after = [ "network.target" "srv.mount" "cresset-sync-setup.service" "cresset-git-canonical-init.service" ];
     requires = [ "cresset-sync-setup.service" "cresset-git-canonical-init.service" ];
+    # RequiresMountsFor is a [Unit] directive. It sat in serviceConfig until systemd was
+    # caught rejecting it -- "Unknown key 'RequiresMountsFor' in section [Service],
+    # ignoring" -- so this guard was silently absent on every unit that declared it. The
+    # /srv gating held anyway, on `requires = [ "srv.mount" ]`; this restores the second
+    # layer it was always meant to have.
+    unitConfig.RequiresMountsFor = "/srv";
     serviceConfig = {
       Type = "oneshot";
       User = user;
@@ -250,14 +277,14 @@ in
       # All working data + the canonical repo live on the /srv Cloud Volume
       # (nofail mount). Hold the pass until /srv is actually mounted so it never
       # runs against an unmounted volume.
-      RequiresMountsFor = "/srv";
-      # Secret env-file (sops): the GitHub App id/installation/private-key
-      # pointer. Optional (`-`) so the read-only Milestone-1 service still starts
-      # before the real App creds are provisioned.
-      EnvironmentFile = [ "-${config.sops.templates."cresset-sync.env".path}" ];
-      # Read-only Milestone-1: bare `run`, NO `--apply` (see the block above). To
-      # enable mutation once the read-only rollout is verified, append
-      # `--apply --export-project <id>`.
+      # Secret env-file (sops): the GitHub App client id + private-key pointer, and the
+      # Telegram credentials. This was optional (`-`) while the pass was read-only, so
+      # the service could start before the App credentials existed. It is mandatory now
+      # that `--apply` is on: a mutating pass with no GitHub credentials cannot push and
+      # cannot escalate, so failing to start is better than running blind.
+      EnvironmentFile = [ config.sops.templates."cresset-sync.env".path ];
+      # See the rollout block above for what each switch does and why `--agent-apply`
+      # is absent.
       #
       # `--repo-root` is the canonical bare repo itself, and `--canonical-repo` is
       # deliberately absent: it defaults to the same store, which is the point — the
@@ -267,7 +294,8 @@ in
         ${cresset-sync}/bin/cresset-sync \
           --repo-root ${canonicalRepo} \
           --db ${stateDb} \
-          run
+          run --apply \
+          --agent-command ${pkgs.claude-code}/bin/claude
       '';
       # ---- GUARDRAIL: bound the worker cgroup ----
       # A git pack/repack of a Magento-sized snapshot is the OOM risk. This cap
@@ -311,11 +339,16 @@ in
     description = "cresset-sync liveness/health check (durable state only)";
     after = [ "srv.mount" ];
     requires = [ "cresset-sync-setup.service" ];
+    # RequiresMountsFor is a [Unit] directive. It sat in serviceConfig until systemd was
+    # caught rejecting it -- "Unknown key 'RequiresMountsFor' in section [Service],
+    # ignoring" -- so this guard was silently absent on every unit that declared it. The
+    # /srv gating held anyway, on `requires = [ "srv.mount" ]`; this restores the second
+    # layer it was always meant to have.
+    unitConfig.RequiresMountsFor = "/srv";
     serviceConfig = {
       Type = "oneshot";
       User = user;
       Group = user;
-      RequiresMountsFor = "/srv";
       # Threshold is generous relative to the 5-minute reconcile cadence: several consecutive
       # missed or failing passes, not a single hiccup, is what should page anyone.
       ExecStart = ''

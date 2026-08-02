@@ -201,6 +201,12 @@ in
     after = [ "network.target" ];
     unitConfig.ConditionPathExists = "/var/lib/cresset-view/repository/current/.jj";
     environment.RUST_LOG = "cresset_view=info,tower_http=info";
+    # RequiresMountsFor is a [Unit] directive. It sat in serviceConfig until systemd was
+    # caught rejecting it -- "Unknown key 'RequiresMountsFor' in section [Service],
+    # ignoring" -- so this guard was silently absent on every unit that declared it. The
+    # /srv gating held anyway, on `requires = [ "srv.mount" ]`; this restores the second
+    # layer it was always meant to have.
+    unitConfig.RequiresMountsFor = "/srv";
     serviceConfig = {
       User = "cresset-view";
       Group = "cresset-view";
@@ -226,7 +232,6 @@ in
       ReadOnlyPaths = [ "/var/lib/cresset-view/repository/current" "/srv/sync" ];
       # /srv is a nofail Cloud Volume, so the viewer must not be held up by it: the sync panel
       # degrades on its own if the path is absent.
-      RequiresMountsFor = "/srv";
       RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
     };
   };

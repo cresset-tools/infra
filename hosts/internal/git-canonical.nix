@@ -119,12 +119,17 @@ in
     # The worker and any push must see the repo present.
     before = [ "cresset-sync.service" ];
     path = [ pkgs.git pkgs.coreutils ];
+    # RequiresMountsFor is a [Unit] directive. It sat in serviceConfig until systemd was
+    # caught rejecting it -- "Unknown key 'RequiresMountsFor' in section [Service],
+    # ignoring" -- so this guard was silently absent on every unit that declared it. The
+    # /srv gating held anyway, on `requires = [ "srv.mount" ]`; this restores the second
+    # layer it was always meant to have.
+    unitConfig.RequiresMountsFor = "/srv";
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
       # Belt-and-braces: hold activation until /srv is actually mounted even if
       # ordering is reshuffled.
-      RequiresMountsFor = "/srv";
       # Runs as root to create /srv/git and chown it to `git`; the repo tree
       # ends up entirely git-owned.
     };
