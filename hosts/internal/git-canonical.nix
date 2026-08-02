@@ -159,6 +159,18 @@ in
       # Belt-and-braces: keep the whole tree git-owned across redeploys (a push
       # or the local worker advance may have created objects as `git`).
       chown -R git:git ${gitHome}
+
+      # And keep it group-WRITABLE, which ownership alone does not give. Two accounts
+      # write here: `git` for pushes over SSH, `cresset-sync` for local ref advances.
+      # A directory created without group write by either one silently breaks the
+      # other, and the failure surfaces later and elsewhere — a push rejected with
+      # "unable to migrate objects to permanent storage", which points at neither
+      # permissions nor the process that caused it.
+      #
+      # cresset-sync.nix sets UMask=0002 so this stops happening at the source; this
+      # repairs any repository that predates that, on every activation.
+      find ${gitHome} -type d -exec chmod g+rwxs {} +
+      find ${gitHome} -type f -exec chmod g+r {} +
     '';
   };
 }

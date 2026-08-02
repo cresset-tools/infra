@@ -303,6 +303,21 @@ in
       # the bounded pack tuning below and zram swap, a spike is throttled/killed
       # inside the unit rather than OOM-killing the box (which also runs Authentik
       # + PostgreSQL).
+      # The canonical repo is shared between two accounts: pushes arrive over SSH as
+      # `git`, and this worker advances refs locally as `cresset-sync` (a member of the
+      # `git` group). `git init --shared=group` sets core.sharedRepository so git widens
+      # permissions on what it writes — but the worker's imports go through JJ, whose
+      # gitoxide backend does not implement core.sharedRepository and falls back to the
+      # process umask. systemd defaults that to 0022, which strips group write.
+      #
+      # The result was object fanout directories created 2755 instead of 2775, owned by
+      # cresset-sync. Everything kept working until the next push, which failed in a way
+      # that names neither permissions nor the worker:
+      #
+      #   refs/heads/main (reason: unable to migrate objects to permanent storage)
+      #
+      # 0002 makes everything this unit creates group-writable, whichever tool writes it.
+      UMask = "0002";
       MemoryHigh = "1500M";
       MemoryMax = "2G";
       # Hardening — the worker only needs its /srv state + the local canonical
