@@ -28,6 +28,25 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/determinate-nix-action@v3
 
+      # Author the PR as the cresset-tools-bot App, NOT as GITHUB_TOKEN.
+      #
+      # A PR opened with GITHUB_TOKEN is authored by github-actions[bot], and GitHub then
+      # holds its workflow runs at `action_required` pending a manual click. That is not a
+      # theoretical inconvenience: PR #49 sat unapproved, was merged anyway, and carried a
+      # nixpkgs bump that left `internal` undeployable. The gate had never run.
+      #
+      # An App identity is not the actions bot, so its PRs run CI unattended — which is the
+      # whole point of a gate. The App is installed org-wide, so the trade was made
+      # deliberately: its key now also lives in this public repo's Actions secrets, where any
+      # workflow here could mint org-wide tokens. Fork PRs cannot read secrets, so that needs
+      # repo write access, but the blast radius on a leak is every cresset-tools repository.
+      - name: Mint an App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CRESSET_BOT_APP_ID }}
+          private-key: ${{ secrets.CRESSET_BOT_PRIVATE_KEY }}
+
       - name: Update flake.lock
         uses: DeterminateSystems/update-flake-lock@v25
         with:
@@ -36,11 +55,14 @@ jobs:
             Automated weekly bump of every flake input.
 
             Merge this PR before the next Sunday 03:30 UTC autoUpgrade
-            cycle to roll the new lock onto running hosts. CI's
-            `nix flake check` runs on this PR via `check.yml` — if it's
-            green, the bump is structurally sound (eval works for every
-            host's NixOS configuration).
+            cycle to roll the new lock onto running hosts.
+
+            `check.yml` runs on this PR and now BUILDS every host the CD
+            pipeline deploys, not just evaluates them. `nix flake check`
+            alone could not catch a package that evaluates fine and fails
+            to compile — one did, and it left a host undeployable. Green
+            here means each host's toplevel actually builds.
           pr-labels: |
             dependencies
             automated
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
