@@ -167,8 +167,13 @@ in
       # "unable to migrate objects to permanent storage", which points at neither
       # permissions nor the process that caused it.
       #
-      # cresset-sync.nix sets UMask=0002 so this stops happening at the source; this
-      # repairs any repository that predates that, on every activation.
+      # cresset-sync.nix sets UMask=0002 so the WORKER stops causing this. That does not
+      # cover an operator: `sudo -u cresset-sync jj ...` in the conflict-resolution
+      # workspace inherits the caller's umask, typically 022, and re-creates 2755 object
+      # directories that the next push over SSH cannot write. It has happened twice.
+      #
+      # So run operator commands as that user with `umask 002` set, and treat this repair
+      # as the net rather than the plan — it only runs on activation.
       find ${gitHome} -type d -exec chmod g+rwxs {} +
       find ${gitHome} -type f -exec chmod g+r {} +
     '';
