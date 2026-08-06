@@ -2,18 +2,15 @@
   description = "cresset-tools/infra: NixOS configurations for every host I run";
 
   inputs = {
-    # PINNED, not `nixos-unstable`. A lockfile update imported from cresset-tools/infra
-    # ("flake.lock: Update (#49)") moved nixpkgs forward to a revision where authentik does
-    # not build:
+    # Back on `nixos-unstable`. It was pinned to 753cc8a for one reason: a weekly bump
+    # had merged a revision where authentik does not build, and nothing was checking.
+    # `check.yml` now builds every deployed host on the PR, and the flake-update PR is
+    # authored by an App so those checks actually run — so a bump that breaks a host
+    # fails its own PR instead of reaching main, the monorepo, and the box.
     #
-    #   The 'ak-guardian' derivation has version '2026.5.3' but .dist-info/METADATA
-    #   specifies version '3.2.0'.
-    #
-    # That is an upstream packaging fault, not ours, and it takes `internal` with it because
-    # authentik is in that host's closure. Pinning to the last revision that built keeps the
-    # host deployable. REMOVE THIS and go back to `nixos-unstable` once authentik builds
-    # again upstream — a pin nobody revisits is how a fleet quietly falls years behind.
-    nixpkgs.url = "github:NixOS/nixpkgs/753cc8a3a87467296ddd1fa93f0cc3e81120ee46";
+    # The lock still holds whatever last passed that gate; removing the pin only means a
+    # bump is now allowed to be PROPOSED, not that it is trusted.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/*";
     disko = {
       url = "github:nix-community/disko";

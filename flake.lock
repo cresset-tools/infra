@@ -18,12 +18,12 @@
     "cresset-sync": {
       "flake": false,
       "locked": {
-        "lastModified": 1785996078,
-        "narHash": "sha256-ovHfK8LH1+t0NI4JA4oCdUbnHlEh8Sgfv3maWD1WhCE=",
-        "rev": "35d63ee6d05247a67493ff147e5d950ebeb96010",
-        "revCount": 37,
+        "lastModified": 1786012992,
+        "narHash": "sha256-kv1sLuEaxgFPfXgboa/uw/nWeeJKaZAw2ExjXqvBDhY=",
+        "rev": "1220ddbea80b0d525c3a4484fa506609d556d1de",
+        "revCount": 38,
         "type": "tarball",
-        "url": "https://api.flakehub.com/f/pinned/cresset-tools/cresset-sync/0.1.37%2Brev-35d63ee6d05247a67493ff147e5d950ebeb96010/019fd5a9-fa33-7e40-a915-3807d2bda994/source.tar.gz"
+        "url": "https://api.flakehub.com/f/pinned/cresset-tools/cresset-sync/0.1.38%2Brev-1220ddbea80b0d525c3a4484fa506609d556d1de/019fd6ab-fa8b-75a0-8b67-364db1e4fc94/source.tar.gz"
       },
       "original": {
         "type": "tarball",
@@ -400,17 +400,17 @@
     },
     "nixpkgs_3": {
       "locked": {
-        "lastModified": 1784120854,
-        "narHash": "sha256-KesHgItiZPgGX740axSiQLcIQ8D24MDqNpkKYWIek8k=",
+        "lastModified": 1785967620,
+        "narHash": "sha256-IItrdb7Puk05RqOBWZYFC5X6Wl1sJmCfh5MWVHw5iMM=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+        "rev": "b7c2ada94fe99c15b0dbcf4d11fd7850b957a436",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
+        "ref": "nixos-unstable",
         "repo": "nixpkgs",
-        "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
         "type": "github"
       }
     },

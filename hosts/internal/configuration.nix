@@ -71,6 +71,11 @@ in
 {
   imports = [
     inputs.sops-nix.nixosModules.sops
+    # Root authorization for the CD workflow. `internal` was added to deploy.yml's matrix
+    # when it was provisioned and this was missed, so every CD run since has failed on this
+    # host alone with `Permission denied (publickey)` while the other four deployed fine —
+    # a red job nobody was watching. The matrix and this import have to move together.
+    ../../modules/ci-deploy-key.nix
     ./git-canonical.nix
     ./cresset-sync.nix
   ];
