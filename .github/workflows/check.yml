@@ -1,12 +1,26 @@
-# Eval-only CI: runs `nix flake check` on every PR and on push to main.
-# Catches broken NixOS configurations and lock-file bumps that fail to
-# resolve before they get merged.
+# CI for every PR and push to main, in two passes.
 #
-# We do NOT build the full system here — that's a 4 GB+ closure per
-# host and would burn cache pulls without producing anything we use.
-# The eval pass is enough to catch syntactic and dependency-graph
-# regressions; full builds happen on the actual host via `nixos-rebuild
-# switch` (manual) or system.autoUpgrade (Sunday timer).
+# `flake-check` evaluates: syntax, the dependency graph, lock files that fail to
+# resolve. Fast, and it runs first.
+#
+# `build-hosts` actually BUILDS each host's toplevel. It used to be omitted, on the
+# reasoning that eval was enough and a 4 GB+ closure per host would burn cache pulls.
+# That reasoning had a hole, and a weekly lock bump found it: nix flake check
+# EVALUATES nixosConfigurations, it does not build them, so a package that evaluates
+# fine and fails to compile sails straight through. One did —
+#
+#   The 'ak-guardian' derivation has version '2026.5.3' but .dist-info/METADATA
+#   specifies version '3.2.0'.
+#
+# — and because authentik is in `internal`'s closure, a green PR merged a lock that
+# left the host undeployable. The cost of the build pass is real; the cost of finding
+# that out at deploy time is worse, and it lands on whoever is deploying rather than on
+# the PR that caused it.
+#
+# Substitution keeps the usual case cheap: an ordinary PR touching one host's config
+# rebuilds almost nothing, because cache.nixos.org and FlakeHub Cache already have it.
+# A nixpkgs bump is expensive by nature — and a package upstream could not build is
+# precisely the one that will not substitute, which is the signal we want.
 name: check
 
 on:
@@ -37,3 +51,38 @@ jobs:
 
       - name: nix flake check
         run: nix flake check --all-systems --print-build-logs
+
+  # Build every host the CD pipeline deploys. Same matrix as deploy.yml, so anything
+  # that would fail on a real deploy fails here first, on the PR that caused it.
+  #
+  # `demo` and `mageos-testing` are deliberately absent, matching deploy.yml: they are
+  # deployed by hand, and demo builds heavy OCI images. Breakage there is found at
+  # deploy time, which is an accepted trade rather than an oversight.
+  build-hosts:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false        # one broken host must not mask the others
+      matrix:
+        include:
+          - { host: bougie-relay, runner: ubuntu-latest }
+          - { host: bougierepo, runner: ubuntu-latest }
+          - { host: telemetry, runner: ubuntu-latest }
+          - { host: internal, runner: ubuntu-latest }
+          # origin is aarch64 → build natively on a free public-repo arm runner
+          - { host: origin, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3
+
+      # Substitute what is already built and push what is not, so the next run — and
+      # the deploy that follows a merge — does not rebuild the same closure.
+      - name: Enable FlakeHub Cache
+        uses: DeterminateSystems/flakehub-cache-action@v3
+
+      - name: Build ${{ matrix.host }}
+        run: |
+          nix build --no-link --print-build-logs \
+            ".#nixosConfigurations.${{ matrix.host }}.config.system.build.toplevel"
