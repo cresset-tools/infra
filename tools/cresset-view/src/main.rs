@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use axum::body::{Body, Bytes};
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{Path as AxumPath, Query, Request, State};
+use axum::middleware::{self, Next};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -200,6 +201,42 @@ struct DiffQuery {
     path: Option<String>,
 }
 
+/// Refuse any request that arrives without an authenticated identity.
+///
+/// This CANNOT be enforced in nginx, which is where it was first attempted. `if (...) return
+/// 403` belongs to the rewrite phase, and `auth_request` to the access phase that runs after
+/// it — so the guard evaluated the identity variable before the outpost had ever been called,
+/// found it empty every time, and refused everyone unconditionally. Written as a fail-closed
+/// gate, it was in fact a wall, and it was indistinguishable from working for as long as
+/// nobody could get in.
+///
+/// Enforcing it here is phase-independent, and it is the better place regardless: the service
+/// must not trust the proxy to have *authenticated* anyone, only to have reported who it is.
+/// That trust is sound solely because this listener is bound to loopback behind that proxy —
+/// if it is ever exposed directly, this header becomes attacker-controlled and the check is
+/// worthless. Bind it to loopback.
+///
+/// `/health` is exempt so a local probe does not need an identity.
+async fn require_identity(request: Request, next: Next) -> Response {
+    if request.uri().path() == "/health" {
+        return next.run(request).await;
+    }
+    let identity = request
+        .headers()
+        .get("x-authentik-username")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .unwrap_or_default();
+    if identity.is_empty() {
+        return (
+            StatusCode::FORBIDDEN,
+            "authentication is required to view this repository",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -232,7 +269,9 @@ async fn main() -> Result<()> {
         .fallback_service(static_files)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .with_state(state)
+        // Outermost, so it runs before anything else touches the request.
+        .layer(middleware::from_fn(require_identity));
 
     let listener = tokio::net::TcpListener::bind(&args.listen)
         .await

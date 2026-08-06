@@ -336,21 +336,18 @@ in
           auth_request_set $authentik_groups $upstream_http_x_authentik_groups;
           auth_request_set $authentik_email $upstream_http_x_authentik_email;
 
-          # FAIL CLOSED. `auth_request` alone is not a gate here: Authentik's embedded
-          # outpost answers 200 for a host it has no provider configured for, so between
-          # this vhost going live and the proxy provider being created in the Authentik
-          # UI, every anonymous request was approved. That is not hypothetical — it is
-          # what happened on first provision, and the whole private monorepo was served
-          # to the internet until the viewer was stopped.
+          # The fail-closed check lives in cresset-view, NOT here. It was here, as
+          #   if ($authentik_username = "") { return 403; }
+          # which cannot work: `if`/`return` belongs to the rewrite phase and `auth_request`
+          # to the access phase that runs after it, so the guard read the identity before the
+          # outpost had ever been called, found it empty every time, and refused everyone
+          # unconditionally. A wall, not a gate — and indistinguishable from a working gate
+          # for as long as nobody could get in.
           #
-          # A 200 from the outpost is therefore not proof of authentication; an identity
-          # header is. Authentik only sets X-authentik-username once a request has really
-          # been authorised, so an empty one means "not authenticated" or "not configured"
-          # — and both must be refused. An unconfigured gate now returns 403 instead of
-          # the repository.
-          if ($authentik_username = "") {
-            return 403 "authentication is not configured for this host";
-          }
+          # nginx's job is therefore only to ask the outpost and forward what it answers.
+          # cresset-view refuses any request whose identity header is absent or empty, which
+          # is phase-independent and is the better place regardless: the service must not
+          # trust the proxy to have authenticated anyone, only to have reported who it is.
 
           proxy_set_header X-authentik-username $authentik_username;
           proxy_set_header X-authentik-groups $authentik_groups;
@@ -358,23 +355,36 @@ in
         '';
       };
 
+      # Deliberately minimal. This carried proxyWebsockets plus
+      # `proxy_pass_request_body off` and `proxy_set_header Content-Length ""`, and every
+      # request to this prefix was answered 400 by nginx WITHOUT reaching the outpost —
+      # no nginx error log, and nothing in authentik's. The same upstream path through
+      # auth.cresset.tools, which has none of those directives, reached the outpost fine.
+      #
+      # `$host` rather than `$http_host`: over HTTP/2 there is no literal Host header, so
+      # $http_host can be empty while $host is always the matched server name.
       locations."/outpost.goauthentik.io" = {
-        proxyPass = "http://127.0.0.1:9000/outpost.goauthentik.io";
-        proxyWebsockets = true;
+        # NO URI part. With `proxy_pass .../outpost.goauthentik.io` nginx rewrites the
+        # matched prefix, and every request to this prefix was answered 400 by nginx without
+        # ever reaching the outpost — no entry in nginx's error log or authentik's. The same
+        # path through auth.cresset.tools, whose `location /` proxies with no URI part,
+        # reached the outpost fine. Passing the path through unchanged matches that.
+        proxyPass = "http://127.0.0.1:9000";
+        # NO `proxy_set_header Host` here. services.nginx.recommendedProxySettings already
+        # sets it, and nginx does not deduplicate: declaring it again emits the header TWICE,
+        # which Go's net/http rejects with 400 at the protocol layer — before any handler, so
+        # authentik logged nothing and nginx logged nothing either. Every request to this
+        # prefix failed that way, and the forward-auth with it. auth.cresset.tools was
+        # unaffected only because its location adds no Host of its own.
         extraConfig = ''
-          proxy_set_header Host $host;
-          proxy_set_header X-Original-URL $scheme://$http_host$request_uri;
-          proxy_pass_request_body off;
-          proxy_set_header Content-Length "";
-          auth_request_set $auth_cookie $upstream_http_set_cookie;
-          add_header Set-Cookie $auth_cookie;
+          proxy_set_header X-Original-URL $scheme://$host$request_uri;
         '';
       };
 
       locations."@goauthentik_proxy_signin".extraConfig = ''
         internal;
         add_header Set-Cookie $auth_cookie;
-        return 302 /outpost.goauthentik.io/start?rd=$scheme://$http_host$request_uri;
+        return 302 /outpost.goauthentik.io/start?rd=$scheme://$host$request_uri;
       '';
     };
   };
