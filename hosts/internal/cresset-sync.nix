@@ -390,6 +390,90 @@ in
     };
   };
 
+  # ---- GUARDRAIL: mirror garbage collection ----
+  #
+  # The per-project bare mirrors accumulate two kinds of garbage, and git cleans neither on
+  # its own in a repository nothing ever runs `gc` in:
+  #
+  #   1. `objects/pack/tmp_*` from fetches that die partway. `git gc` only removes these once
+  #      they are a day old, so a repository that is never gc'd keeps every one for ever.
+  #   2. Whole monorepo commits. The exporter brings a commit's mapped subtree into the mirror
+  #      with `git fetch <monorepo> <sha>`, and fetching a commit brings its ENTIRE tree and
+  #      ancestry -- every other project, `upstream/`, `experiments/`, `docs/`. They are
+  #      unreachable from `refs/heads/main` so they are never pushed (verified: the GitHub
+  #      repo is 641 KB and carries none of it), but they sit on disk until collected.
+  #
+  # On 2026-08-07 this filled /srv and wedged the worker: `infra.git` had reached 11G against
+  # 641 KB of real content -- 8 GiB of tmp_* garbage plus 2 GiB of orphaned monorepo objects.
+  # A single `gc --prune=now` took it to 1.7M, and the whole mirror tree from 14G to 2.2G.
+  # The disk being full is also why it could not fix itself: `git gc` needs room to write a
+  # new pack before it can free the old one, so the failure mode is a deadlock, not a warning.
+  #
+  # Daily, because the observed leak rate filled 20G in about a week. This treats the symptom;
+  # the exporter should be fetching only the mapped subtree rather than whole commits, which
+  # is a change to make deliberately rather than during an outage.
+  systemd.services.cresset-sync-gc = {
+    description = "Garbage-collect the cresset-sync downstream mirrors";
+    after = [ "srv.mount" ];
+    requires = [ "cresset-sync-setup.service" ];
+    unitConfig.RequiresMountsFor = "/srv";
+    # Never concurrently with a pass: gc rewrites packs the worker may be reading, and an
+    # export mid-fetch owns tmp_* files that `--prune=now` would otherwise be entitled to
+    # delete out from under it.
+    conflicts = [ "cresset-sync.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      User = user;
+      Group = user;
+      # Same reason as the worker: jj/gitoxide ignores core.sharedRepository, so anything
+      # writing here must leave group-writable objects behind or the next pass fails with
+      # "unable to migrate objects to permanent storage".
+      UMask = "0002";
+      ExecStart = pkgs.writeShellScript "cresset-sync-gc" ''
+        set -u
+        failed=0
+        for repo in ${syncDir}/mirrors/*.git; do
+          [ -d "$repo" ] || continue
+          before=$(${pkgs.coreutils}/bin/du -sm "$repo" | ${pkgs.coreutils}/bin/cut -f1)
+          if ${pkgs.git}/bin/git -C "$repo" gc --prune=now --quiet; then
+            after=$(${pkgs.coreutils}/bin/du -sm "$repo" | ${pkgs.coreutils}/bin/cut -f1)
+            echo "$(${pkgs.coreutils}/bin/basename "$repo"): ''${before}M -> ''${after}M"
+          else
+            # One broken mirror must not stop the rest: the point of this unit is that the
+            # OTHER thirty keep from filling the disk.
+            echo "$(${pkgs.coreutils}/bin/basename "$repo"): gc FAILED" >&2
+            failed=1
+          fi
+        done
+        ${pkgs.coreutils}/bin/df -h ${syncDir} | ${pkgs.coreutils}/bin/tail -1
+        exit "$failed"
+      '';
+      NoNewPrivileges = true;
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      PrivateTmp = true;
+      ReadWritePaths = [ syncDir ];
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectControlGroups = true;
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+      RestrictNamespaces = true;
+      LockPersonality = true;
+      SystemCallArchitectures = "native";
+      SystemCallFilter = [ "@system-service" "~@privileged" ];
+    };
+  };
+
+  systemd.timers.cresset-sync-gc = {
+    description = "Garbage-collect the cresset-sync mirrors daily";
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = "03:20";
+      Persistent = true;
+      RandomizedDelaySec = "20m";
+    };
+  };
+
   systemd.timers.cresset-sync-health = {
     description = "Check cresset-sync liveness every 15 minutes";
     wantedBy = [ "timers.target" ];
