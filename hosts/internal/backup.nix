@@ -86,10 +86,31 @@ in
           # Verify before it becomes the only copy. A bundle that cannot be read is worth
           # discovering now, not during a restore.
           $git bundle verify ${stage}/cresset.bundle >/dev/null
-          # `-readonly` because the unit's ProtectSystem=strict leaves /srv read-only, and
-          # sqlite would otherwise want to touch the WAL sidecars next to the source. Under
-          # the lease there is no writer, so a read-only `.backup` is a consistent snapshot.
-          ${pkgs.sqlite}/bin/sqlite3 -readonly ${syncDb} ".backup ${stage}/state.db"
+          # Copy the database and its WAL sidecars, then consolidate in the STAGE directory.
+          #
+          # `.backup` against the live file cannot work here whichever way it is opened: WAL
+          # mode needs to map a `-shm` beside the source, and `ProtectSystem=strict` leaves
+          # /srv read-only for this unit. `-readonly` does not avoid that -- it failed with
+          # "unable to open database file".
+          #
+          # Copying under the lease is consistent because there is no writer, and it touches
+          # nothing in /srv. In practice SQLite has already checkpointed by the time the last
+          # connection closed, so the sidecars are usually absent or empty -- but "usually" is
+          # not a property to build a backup on, so take them when they are there.
+          ${pkgs.coreutils}/bin/cp -p ${syncDb} ${stage}/state.db
+          for sidecar in -wal -shm; do
+            if [ -e "${syncDb}$sidecar" ]; then
+              ${pkgs.coreutils}/bin/cp -p "${syncDb}$sidecar" "${stage}/state.db$sidecar"
+            fi
+          done
+          # Fold any WAL into the copy and prove the result is sound, both inside the writable
+          # stage. A restore then needs one file, and a database that cannot be opened is
+          # discovered now rather than when it is the only one left.
+          ${pkgs.sqlite}/bin/sqlite3 ${stage}/state.db "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
+          if [ "$(${pkgs.sqlite}/bin/sqlite3 ${stage}/state.db 'PRAGMA integrity_check;')" != "ok" ]; then
+            echo "staged checkpoint database failed integrity_check; refusing to back it up" >&2
+            exit 1
+          fi
         ''}
     '';
     paths = [
