@@ -74,14 +74,22 @@ in
       ${pkgs.util-linux}/bin/flock --exclusive --timeout 900 ${lease} \
         ${pkgs.writeShellScript "cresset-backup-stage" ''
           set -eu
+          # `safe.directory` because this runs as root against a repository owned by `git`,
+          # and git's dubious-ownership guard refuses it. Scoped to the one invocation rather
+          # than set globally, so it grants exactly this. Worth knowing that the refusal
+          # surfaces as "fatal: Need a repository to create a bundle", which reads like the
+          # path is wrong rather than like a permission decision.
+          git="${pkgs.git}/bin/git -c safe.directory=${canonical} -C ${canonical}"
           # A bundle, not a copy of the directory: one self-contained file that `git clone`
           # restores directly, and that does not change shape when gc repacks.
-          ${pkgs.git}/bin/git -C ${canonical} bundle create ${stage}/cresset.bundle --all
+          $git bundle create ${stage}/cresset.bundle --all
           # Verify before it becomes the only copy. A bundle that cannot be read is worth
           # discovering now, not during a restore.
-          ${pkgs.git}/bin/git -C ${canonical} bundle verify ${stage}/cresset.bundle >/dev/null
-          # WAL-safe: `.backup` takes a consistent snapshot of a live SQLite database.
-          ${pkgs.sqlite}/bin/sqlite3 ${syncDb} ".backup ${stage}/state.db"
+          $git bundle verify ${stage}/cresset.bundle >/dev/null
+          # `-readonly` because the unit's ProtectSystem=strict leaves /srv read-only, and
+          # sqlite would otherwise want to touch the WAL sidecars next to the source. Under
+          # the lease there is no writer, so a read-only `.backup` is a consistent snapshot.
+          ${pkgs.sqlite}/bin/sqlite3 -readonly ${syncDb} ".backup ${stage}/state.db"
         ''}
     '';
     paths = [
