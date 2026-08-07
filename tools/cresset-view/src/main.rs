@@ -7,8 +7,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, bail};
 use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, Query, Request, State};
-use axum::middleware::{self, Next};
 use axum::http::{StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -103,6 +103,9 @@ struct RevisionResponse {
     operation_id: String,
     head_count: usize,
     revisions: Vec<Revision>,
+    /// Whether another page exists after this one. Computed by reading one revision past the
+    /// page rather than by counting the whole revset, so it costs one extra commit.
+    has_more: bool,
 }
 
 #[derive(Serialize)]
@@ -189,6 +192,14 @@ enum DiffEvent {
 #[derive(Deserialize)]
 struct RevisionQuery {
     limit: Option<usize>,
+    /// How many matching revisions to skip. Paging is by offset within one operation id:
+    /// the response carries the operation the page was read at, so a client can notice the
+    /// repository moved underneath it rather than silently stitching two histories together.
+    offset: Option<usize>,
+    /// Case-insensitive filter over description, author name/email, and change/commit id
+    /// prefixes. Matched against the commit itself, never interpolated into a revset — user
+    /// input must not become revset syntax.
+    q: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -488,19 +499,54 @@ async fn revisions(
     Query(query): Query<RevisionQuery>,
 ) -> Result<Json<RevisionResponse>, AppError> {
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let offset = query.offset.unwrap_or(0);
+    // An all-whitespace `q` is the same as no filter: a search box that has been cleared to
+    // spaces should show the history, not nothing.
+    let needle = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase);
     let path = state.repository.as_ref().clone();
     let response = run_jj(move || async move {
         let loaded = load_repository(&path).await?;
-        let commits = RevsetExpression::all()
+        let mut stream = RevsetExpression::all()
             .evaluate(loaded.repo.as_ref())?
             .stream()
-            .commits(loaded.repo.store())
-            .take(limit)
-            .try_collect::<Vec<_>>()
-            .await?;
+            .commits(loaded.repo.store());
 
-        let mut revisions = Vec::with_capacity(commits.len());
-        for commit in commits {
+        // Walk the revset, keeping only the requested window of MATCHING revisions.
+        //
+        // Filtering here rather than in the revset is deliberate. jj's revset language has
+        // `description()`/`author()` functions, but building an expression out of user input
+        // means user input becomes syntax — a search for `)` or `|` would either error or,
+        // worse, parse into a different query than the one that was typed.
+        //
+        // `revision_from_commit` runs only for the page, so an unmatched commit costs a
+        // string compare rather than a full render.
+        let mut seen = 0usize;
+        let mut page = Vec::with_capacity(limit.min(64));
+        while let Some(commit) = stream.try_next().await? {
+            if let Some(needle) = &needle
+                && !commit_matches(&commit, needle)
+            {
+                continue;
+            }
+            if seen >= offset {
+                page.push(commit);
+                // One past the page: enough to know another exists, without counting the rest.
+                if page.len() > limit {
+                    break;
+                }
+            }
+            seen += 1;
+        }
+        let has_more = page.len() > limit;
+        page.truncate(limit);
+
+        let mut revisions = Vec::with_capacity(page.len());
+        for commit in page {
             revisions.push(revision_from_commit(loaded.repo.as_ref(), &commit)?);
         }
 
@@ -508,10 +554,24 @@ async fn revisions(
             operation_id: loaded.repo.op_id().hex(),
             head_count: loaded.repo.view().heads().len(),
             revisions,
+            has_more,
         })
     })
     .await?;
     Ok(Json(response))
+}
+
+/// Does `commit` match a search needle (already lowercased)?
+///
+/// Description and author are substring matches; ids are PREFIX matches, because a substring
+/// match on a hex id turns any short query into noise — nearly every two-character string
+/// appears somewhere in some id.
+fn commit_matches(commit: &Commit, needle: &str) -> bool {
+    commit.description().to_lowercase().contains(needle)
+        || commit.author().name.to_lowercase().contains(needle)
+        || commit.author().email.to_lowercase().contains(needle)
+        || commit.change_id().reverse_hex().starts_with(needle)
+        || commit.id().hex().starts_with(needle)
 }
 
 async fn bookmarks(State(state): State<AppState>) -> Result<Json<BookmarkResponse>, AppError> {

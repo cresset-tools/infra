@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "test": "esbuild src/graph.test.ts --bundle --platform=node --format=esm --outfile=.test-graph.mjs --log-level=warning && node .test-graph.mjs"
   },
   "dependencies": {
     "@pierre/diffs": "1.2.12",

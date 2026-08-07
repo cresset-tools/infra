@@ -9,6 +9,7 @@ import {
 } from '@pierre/diffs';
 import { FileTree, prepareFileTreeInput, type FileTreePreparedInput } from '@pierre/trees';
 import './style.css';
+import { graphLaneX, layoutRevisionGraph, type GraphRow } from './graph';
 
 interface Revision {
   change_id: string;
@@ -28,6 +29,7 @@ interface RevisionsResponse {
   operation_id: string;
   head_count: number;
   revisions: Revision[];
+  has_more: boolean;
 }
 
 interface FileChange {
@@ -74,20 +76,6 @@ interface FileResponse {
 type ViewMode = 'browse' | 'changes';
 type ThemePreference = 'auto' | 'light' | 'dark';
 
-interface GraphSegment {
-  fromLane: number;
-  toLane: number;
-  fromY: number;
-  toY: number;
-  colorLane: number;
-}
-
-interface GraphRow {
-  lane: number;
-  laneCount: number;
-  segments: GraphSegment[];
-}
-
 const app = document.querySelector<HTMLElement>('#app');
 if (app == null) throw new Error('missing app element');
 
@@ -117,6 +105,10 @@ app.innerHTML = `
   <section class="workspace">
     <aside class="changes">
       <h2><span>Revisions</span><strong id="head-count"></strong></h2>
+      <label class="revision-search">
+        <input id="revision-search" type="search" placeholder="Search description, author, or id"
+               aria-label="Search revisions" autocomplete="off" spellcheck="false">
+      </label>
       <label class="revision-pan">
         <span>Pan topology</span>
         <input id="revision-pan" type="range" min="0" value="0" aria-label="Pan revision topology">
@@ -141,6 +133,7 @@ const operation = requiredElement('#operation');
 const revisionList = requiredElement('#revision-list');
 const headCount = requiredElement('#head-count');
 const revisionPan = requiredElement<HTMLInputElement>('#revision-pan');
+const revisionSearch = requiredElement<HTMLInputElement>('#revision-search');
 const fileTreeContainer = requiredElement('#file-tree');
 const fileHeading = requiredElement('#file-heading');
 const changeHeading = requiredElement('#change-heading');
@@ -154,6 +147,24 @@ let diffItems: CodeViewItem[] = [];
 let loadedDiffPaths = new Set<string>();
 let currentRevision: Revision | null = null;
 let currentRevisionButton: HTMLButtonElement | null = null;
+// The revision list is paged, so it is state rather than one response. `graphLanes` is carried
+// between pages: the graph layout is a single top-down pass, so a page can continue the previous
+// page's lane assignment instead of re-laying-out everything already on screen.
+const loadedRevisions: Revision[] = [];
+const revisionButtons = new Map<string, HTMLButtonElement>();
+let graphLanes: Array<string | null> = [];
+let graphMaxLanes = 1;
+let revisionOffset = 0;
+let revisionHasMore = false;
+let revisionQuery = '';
+let revisionLoading = false;
+// Bumped on every reset so an in-flight page from a superseded search cannot append to the list
+// that replaced it.
+let revisionGeneration = 0;
+let revisionMoreButton: HTMLButtonElement | null = null;
+let revisionStatus: HTMLParagraphElement | null = null;
+let revisionObserver: IntersectionObserver | null = null;
+let searchDebounce: number | undefined;
 const initialUrlState = readUrlState();
 let currentMode: ViewMode = initialUrlState.path == null ? 'browse' : 'changes';
 let selectionGeneration = 0;
@@ -181,21 +192,124 @@ void initialize();
 void renderSyncStatus();
 
 async function initialize() {
-  const response = await fetchJson<RevisionsResponse>('/api/revisions?limit=150');
-  operation.textContent = `operation ${short(response.operation_id)}`;
-  headCount.textContent = `${response.head_count.toLocaleString()} heads`;
-  const revisionButtons = new Map<string, HTMLButtonElement>();
-  const graphRows = layoutRevisionGraph(response.revisions);
-  const maxGraphLanes = Math.max(1, ...graphRows.map((row) => row.laneCount));
-  const graphLaneGap = 14;
-  const graphWidth = Math.ceil(24 + (maxGraphLanes - 1) * graphLaneGap);
+  revisionSearch.addEventListener('input', () => {
+    // Debounced: each keystroke would otherwise walk the whole revset server-side.
+    window.clearTimeout(searchDebounce);
+    searchDebounce = window.setTimeout(() => void applySearch(revisionSearch.value), 200);
+  });
+  revisionSearch.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && revisionSearch.value !== '') {
+      event.preventDefault();
+      revisionSearch.value = '';
+      void applySearch('');
+    }
+  });
 
-  for (const [index, revision] of response.revisions.entries()) {
+  revisionPan.addEventListener('input', () => {
+    revisionList.scrollLeft = Number(revisionPan.value);
+  });
+  revisionList.addEventListener('scroll', () => {
+    revisionPan.value = String(revisionList.scrollLeft);
+  }, { passive: true });
+  new ResizeObserver(syncRevisionPanRange).observe(revisionList);
+
+  const first = await loadRevisionPage(true);
+  if (first == null) return;
+  operation.textContent = `operation ${short(first.operation_id)}`;
+  headCount.textContent = `${first.head_count.toLocaleString()} heads`;
+
+  let initialRevision = initialUrlState.revision == null
+    ? loadedRevisions.find((revision) => revision.working_copy) ?? loadedRevisions[0]
+    : findRevision(loadedRevisions, initialUrlState.revision);
+  // A revision outside the first page is normal now that the list is paged — 3,700 revisions
+  // are reachable and 100 are loaded — so fall back to fetching it directly rather than
+  // showing nothing for a link someone shared.
+  if (initialRevision == null && initialUrlState.revision != null) {
+    initialRevision = await fetchJson<Revision>(`/api/revisions/${encodeURIComponent(initialUrlState.revision)}`);
+  }
+  if (initialRevision != null) {
+    await selectRevision(initialRevision, revisionButtons.get(initialRevision.commit_id) ?? null, false);
+  }
+  window.addEventListener('popstate', () => void restoreUrlState());
+}
+
+/// Reset to an empty list and load the first page for `query`.
+async function applySearch(raw: string) {
+  const next = raw.trim();
+  if (next === revisionQuery) return;
+  revisionQuery = next;
+  await loadRevisionPage(true);
+}
+
+/// Fetch one page and append it. `reset` clears the list first (a new search, or the first load).
+async function loadRevisionPage(reset: boolean): Promise<RevisionsResponse | null> {
+  if (revisionLoading && !reset) return null;
+  revisionLoading = true;
+  if (reset) {
+    revisionGeneration += 1;
+    loadedRevisions.length = 0;
+    revisionButtons.clear();
+    graphLanes = [];
+    graphMaxLanes = 1;
+    revisionOffset = 0;
+    revisionList.replaceChildren();
+    revisionMoreButton = null;
+    revisionStatus = null;
+    revisionObserver?.disconnect();
+    revisionObserver = null;
+  }
+  const generation = revisionGeneration;
+  setMoreState('loading');
+
+  const url = new URL('/api/revisions', location.origin);
+  url.searchParams.set('limit', '100');
+  url.searchParams.set('offset', String(revisionOffset));
+  if (revisionQuery !== '') url.searchParams.set('q', revisionQuery);
+
+  let response: RevisionsResponse;
+  try {
+    response = await fetchJson<RevisionsResponse>(url.pathname + url.search);
+  } catch (error) {
+    revisionLoading = false;
+    if (generation === revisionGeneration) setMoreState('error');
+    throw error;
+  }
+  // A superseded search finished after the one that replaced it; drop it.
+  if (generation !== revisionGeneration) {
+    revisionLoading = false;
+    return null;
+  }
+
+  appendRevisionRows(response.revisions);
+  revisionOffset += response.revisions.length;
+  revisionHasMore = response.has_more;
+  revisionLoading = false;
+  setMoreState(revisionHasMore ? 'more' : 'done');
+  syncRevisionPanRange();
+  return response;
+}
+
+function appendRevisionRows(revisions: Revision[]) {
+  // In search mode the visible rows are not contiguous history, so a topology graph drawn
+  // through them would connect commits that are not adjacent — a picture that is simply false.
+  // Show the rows without it instead.
+  const searching = revisionQuery !== '';
+  const rows = searching ? null : layoutRevisionGraph(revisions, graphLanes);
+  if (rows != null) {
+    graphMaxLanes = Math.max(graphMaxLanes, ...rows.map((row) => row.laneCount));
+  }
+  const laneGap = 14;
+  const width = searching ? 0 : Math.ceil(24 + (graphMaxLanes - 1) * laneGap);
+  // Set once on the container rather than per row: a later page can widen the graph, and every
+  // row has to agree on the column width or the sticky text column stops lining up.
+  revisionList.style.setProperty('--graph-width', `${width}px`);
+
+  const fragment = document.createDocumentFragment();
+  for (const [index, revision] of revisions.entries()) {
     const button = document.createElement('button');
     button.className = 'revision';
-    button.style.setProperty('--graph-width', `${graphWidth}px`);
     button.innerHTML = `
-      ${renderRevisionGraph(graphRows[index], revision, graphWidth, graphLaneGap)}
+      ${rows == null ? '' : renderRevisionGraph(rows[index], revision, width, laneGap)}
       <span class="revision-copy">
         <span class="revision-id">${revision.working_copy ? '@ · ' : ''}${escapeHtml(short(revision.change_id))}</span>
         <strong>${escapeHtml(firstLine(revision.description) || '(no description)')}</strong>
@@ -211,27 +325,68 @@ async function initialize() {
     `;
     button.addEventListener('click', () => void selectRevision(revision, button, true));
     revisionButtons.set(revision.commit_id, button);
-    revisionList.append(button);
+    loadedRevisions.push(revision);
+    fragment.append(button);
   }
-  syncRevisionPanRange();
-  revisionPan.addEventListener('input', () => {
-    revisionList.scrollLeft = Number(revisionPan.value);
-  });
-  revisionList.addEventListener('scroll', () => {
-    revisionPan.value = String(revisionList.scrollLeft);
-  }, { passive: true });
-  new ResizeObserver(syncRevisionPanRange).observe(revisionList);
+  // Insert before the footer so the "load more" control stays at the bottom.
+  revisionList.insertBefore(fragment, revisionMoreButton ?? revisionStatus ?? null);
+  if (currentRevision != null) {
+    const button = revisionButtons.get(currentRevision.commit_id);
+    if (button != null) {
+      button.classList.add('selected');
+      currentRevisionButton = button;
+    }
+  }
+}
 
-  let initialRevision = initialUrlState.revision == null
-    ? response.revisions.find((revision) => revision.working_copy) ?? response.revisions[0]
-    : findRevision(response.revisions, initialUrlState.revision);
-  if (initialRevision == null && initialUrlState.revision != null) {
-    initialRevision = await fetchJson<Revision>(`/api/revisions/${encodeURIComponent(initialUrlState.revision)}`);
+/// The footer of the list: a load-more button, a terminal message, or nothing.
+function setMoreState(state: 'loading' | 'more' | 'done' | 'error') {
+  revisionStatus?.remove();
+  revisionStatus = null;
+  if (state === 'more') {
+    if (revisionMoreButton == null) {
+      revisionMoreButton = document.createElement('button');
+      revisionMoreButton.type = 'button';
+      revisionMoreButton.className = 'revision-more';
+      revisionMoreButton.addEventListener('click', () => void loadRevisionPage(false));
+      revisionList.append(revisionMoreButton);
+      // Scrolling the button into view loads the next page, so the button is a fallback for
+      // anyone who reaches it by keyboard rather than the only way through.
+      revisionObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && !revisionLoading && revisionHasMore) {
+          void loadRevisionPage(false);
+        }
+      }, { root: revisionList, rootMargin: '400px' });
+      revisionObserver.observe(revisionMoreButton);
+    }
+    revisionMoreButton.disabled = false;
+    revisionMoreButton.textContent = 'Load more';
+    return;
   }
-  if (initialRevision != null) {
-    await selectRevision(initialRevision, revisionButtons.get(initialRevision.commit_id) ?? null, false);
+  if (state === 'loading') {
+    if (revisionMoreButton != null) {
+      revisionMoreButton.disabled = true;
+      revisionMoreButton.textContent = 'Loading…';
+    }
+    return;
   }
-  window.addEventListener('popstate', () => void restoreUrlState(response.revisions, revisionButtons));
+  revisionObserver?.disconnect();
+  revisionObserver = null;
+  revisionMoreButton?.remove();
+  revisionMoreButton = null;
+  revisionStatus = document.createElement('p');
+  revisionStatus.className = 'revision-status';
+  if (state === 'error') {
+    revisionStatus.textContent = 'Could not load revisions.';
+  } else if (loadedRevisions.length === 0) {
+    revisionStatus.textContent = `No revision matches ${revisionQuery}.`;
+  } else if (revisionQuery !== '') {
+    const n = loadedRevisions.length;
+    revisionStatus.textContent = `${n} matching revision${n === 1 ? '' : 's'}.`;
+  } else {
+    revisionStatus.textContent = 'End of history.';
+  }
+  revisionList.append(revisionStatus);
 }
 
 async function setMode(mode: ViewMode) {
@@ -536,47 +691,6 @@ function applyTreeTheme() {
   tree?.getFileTreeContainer()?.style.setProperty('color-scheme', colorScheme);
 }
 
-function layoutRevisionGraph(revisions: Revision[]): GraphRow[] {
-  const lanes: Array<string | null> = [];
-  const rows: GraphRow[] = [];
-
-  for (const revision of revisions) {
-    let lane = lanes.indexOf(revision.commit_id);
-    const continuesFromAbove = lane >= 0;
-    if (lane < 0) {
-      lane = lanes.indexOf(null);
-      if (lane < 0) lane = lanes.length;
-      lanes[lane] = revision.commit_id;
-    }
-
-    const segments: GraphSegment[] = [];
-    for (let activeLane = 0; activeLane < lanes.length; activeLane += 1) {
-      if (activeLane !== lane && lanes[activeLane] != null) {
-        segments.push({ fromLane: activeLane, toLane: activeLane, fromY: 0, toY: 100, colorLane: activeLane });
-      }
-    }
-    if (continuesFromAbove) {
-      segments.push({ fromLane: lane, toLane: lane, fromY: 0, toY: 50, colorLane: lane });
-    }
-
-    lanes[lane] = null;
-    for (const [parentIndex, parentId] of revision.parent_commit_ids.entries()) {
-      let parentLane = lanes.indexOf(parentId);
-      if (parentLane < 0) {
-        parentLane = parentIndex === 0 && lanes[lane] == null ? lane : lanes.indexOf(null);
-        if (parentLane < 0) parentLane = lanes.length;
-        lanes[parentLane] = parentId;
-      }
-      segments.push({ fromLane: lane, toLane: parentLane, fromY: 50, toY: 100, colorLane: parentLane });
-    }
-
-    while (lanes.length > 0 && lanes.at(-1) == null) lanes.pop();
-    rows.push({ lane, laneCount: Math.max(lane + 1, lanes.length), segments });
-  }
-
-  return rows;
-}
-
 function renderRevisionGraph(row: GraphRow, revision: Revision, width: number, laneGap: number): string {
   const paths = row.segments.map((segment) => {
     const fromX = graphLaneX(segment.fromLane, laneGap);
@@ -602,10 +716,6 @@ function renderRevisionGraph(row: GraphRow, revision: Revision, width: number, l
       ${revision.is_head ? `<span class="graph-head-label lane-${row.lane % 8}" style="left: ${graphLaneX(row.lane, laneGap) + 10}px">head</span>` : ''}
     </span>
   `;
-}
-
-function graphLaneX(lane: number, laneGap: number): number {
-  return 12 + lane * laneGap;
 }
 
 function pierreThemeType(): ThemeTypes {
@@ -664,14 +774,13 @@ function findRevision(revisions: Revision[], id: string): Revision | undefined {
   return revisions.find((revision) => revision.commit_id.startsWith(id) || revision.change_id.startsWith(id));
 }
 
-async function restoreUrlState(
-  revisions: Revision[],
-  revisionButtons: Map<string, HTMLButtonElement>,
-) {
+async function restoreUrlState() {
   const state = readUrlState();
+  // Reads the LIVE loaded list: paging means what is loaded grows over time, and popstate can
+  // fire long after the first page.
   let revision = state.revision == null
-    ? revisions.find((candidate) => candidate.working_copy) ?? revisions[0]
-    : findRevision(revisions, state.revision);
+    ? loadedRevisions.find((candidate) => candidate.working_copy) ?? loadedRevisions[0]
+    : findRevision(loadedRevisions, state.revision);
   if (revision == null && state.revision != null) {
     revision = await fetchJson<Revision>(`/api/revisions/${encodeURIComponent(state.revision)}`);
   }

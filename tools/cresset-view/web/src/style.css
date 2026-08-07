@@ -68,7 +68,18 @@ aside h2 strong { color: var(--text); font-size: 10px; font-weight: 500; letter-
 .revision-pan { height: 34px; display: flex; gap: 10px; align-items: center; padding: 0 14px; color: var(--muted); border-bottom: 1px solid var(--border-soft); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
 .revision-pan input { min-width: 0; flex: 1; accent-color: var(--accent); }
 .revision-pan input:disabled { opacity: .35; }
-.revision-list { height: calc(100% - 80px); overflow: auto; scrollbar-gutter: stable; }
+/* The panel is a flex column so the list simply takes the space left over. It used to be
+   `height: calc(100% - 80px)`, a hard-coded sum of the header and pan control that any new
+   row in this panel would silently invalidate. */
+.changes { display: flex; flex-direction: column; min-height: 0; }
+.revision-list { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.revision-search { display: flex; padding: 8px 14px; border-bottom: 1px solid var(--border-soft); }
+.revision-search input { width: 100%; min-width: 0; padding: 6px 9px; color: inherit; font: inherit; font-size: 12px; background: var(--page-bg, transparent); border: 1px solid var(--border-soft); border-radius: 6px; }
+.revision-search input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.revision-status { padding: 10px 14px; color: var(--muted); font-size: 11px; }
+.revision-more { width: 100%; padding: 11px 14px; color: var(--accent); font: inherit; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; text-align: center; background: var(--panel-bg); border: 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+.revision-more:hover:not(:disabled) { background: var(--selected-bg); }
+.revision-more:disabled { color: var(--muted); cursor: default; }
 .revision { width: max(100%, calc(var(--graph-width) + 320px)); min-height: 78px; display: grid; grid-template-columns: var(--graph-width) 320px; padding: 0; text-align: left; color: inherit; background: var(--panel-bg); border: 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
 .revision:hover, .revision.selected { background: var(--selected-bg); }
 .revision.selected { box-shadow: inset 3px 0 var(--accent); }

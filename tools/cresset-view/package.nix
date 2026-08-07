@@ -14,6 +14,15 @@ let
       ];
     };
     npmDepsHash = "sha256-ST8Bo1mKZpa8eP4j9MEhiHIiLd4snyrCk0F8mtm76t0=";
+    # Run `npm test` in the sandbox. The revision graph layout carries lane state across
+    # pages, and a mistake there does not throw -- it draws a history that is subtly not the
+    # one in the repository. A check that only runs on someone's laptop does not protect that.
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      npm run test
+      runHook postCheck
+    '';
     installPhase = ''
       runHook preInstall
       cp -r dist $out

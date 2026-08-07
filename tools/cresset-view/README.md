@@ -15,9 +15,15 @@ Build the frontend, then run the service against a jj workspace:
 cd web
 npm install
 npm run build
+npm test          # revision graph layout checks; also run by the Nix build
 cd ..
 cargo run -- --repository /home/jelle/cresset
 ```
+
+`npm test` is a plain script rather than a test runner: this Node build cannot start
+`node:test`, and `node:assert` would pull `@types/node` into the app's typecheck. It runs
+in the Nix sandbox too (`package.nix`, `checkPhase`), so a broken layout fails the build
+rather than only the laptop it was written on.
 
 Open `http://127.0.0.1:8080`. The viewer refuses repositories with divergent
 operation heads instead of reconciling them and never snapshots the working
