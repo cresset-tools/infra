@@ -35,6 +35,33 @@ permissions:
   id-token: write
 
 jobs:
+  # Every host CD deploys must be able to let CD in.
+  #
+  # `deploy.yml`'s matrix and `modules/ci-deploy-key.nix` are two lists that have to agree,
+  # and nothing made them. `internal` was added to the matrix without the import and CD failed
+  # on it all day with `Permission denied (publickey)` — a failure that looks like a broken
+  # secret, points at nothing in the diff that caused it, and only shows up at deploy time on
+  # main. Cheap to check, so check it.
+  deploy-key-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every deployed host imports ci-deploy-key.nix
+        run: |
+          set -euo pipefail
+          matrix=$(grep -oE '\{ host: [a-z0-9-]+' .github/workflows/deploy.yml \
+                   | awk '{print $3}' | sort -u)
+          keyed=$(grep -l 'ci-deploy-key.nix' hosts/*/configuration.nix \
+                  | sed 's|^hosts/||; s|/configuration.nix$||' | sort -u)
+          missing=$(comm -23 <(echo "$matrix") <(echo "$keyed") || true)
+          if [ -n "$missing" ]; then
+            echo "::error::deploy.yml deploys these hosts, but they do not import"\
+                 "modules/ci-deploy-key.nix, so CD cannot authenticate to them:"
+            echo "$missing" | sed 's/^/  - /'
+            exit 1
+          fi
+          echo "all deployed hosts carry the CD key:"; echo "$matrix" | sed 's/^/  - /'
+
   flake-check:
     runs-on: ubuntu-latest
     steps:
