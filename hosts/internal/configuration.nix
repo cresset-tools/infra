@@ -78,6 +78,7 @@ in
     ../../modules/ci-deploy-key.nix
     ./git-canonical.nix
     ./cresset-sync.nix
+    ./backup.nix
   ];
 
   boot.loader.systemd-boot.enable = true;
