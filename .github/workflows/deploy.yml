@@ -17,13 +17,23 @@ name: deploy
 on:
   push:
     branches: [main]
-    paths:
-      - "flake.nix"
-      - "flake.lock"
-      - "hosts/**"
-      - "modules/**"
-      - "demo-images.nix"
-      - ".github/workflows/deploy.yml"
+    # An IGNORE list, not an allow list.
+    #
+    # This was an allow list of flake.nix/flake.lock/hosts/modules/demo-images.nix, and it
+    # omitted `tools/**` -- where cresset-view lives. `hosts/internal` runs
+    # `${cressetView}/bin/cresset-view` as a service, so tools IS in the deployed closure, and
+    # every viewer change since CD was wired silently never deployed. It only reached the box
+    # when some unrelated hosts/ or flake.lock change happened to rebuild it.
+    #
+    # An allow list fails closed on anything nobody thought of: add a directory the closure
+    # depends on and deployment quietly stops covering it, with no error anywhere. Ignoring
+    # what provably cannot affect a closure instead fails the safe way -- a new source
+    # directory deploys by default, and the cost of being wrong is a redundant build rather
+    # than a host running last month's code.
+    paths-ignore:
+      - "**/*.md"
+      - ".github/workflows/check.yml"
+      - ".github/workflows/update-flake-lock.yml"
   workflow_dispatch:
     inputs:
       host:
