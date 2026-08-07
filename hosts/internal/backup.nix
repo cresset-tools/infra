@@ -40,6 +40,26 @@
 # gone the backups are unopenable, and a backup you cannot open is not a backup. These are
 # encrypted to the admin age keys as well as the host key, so the recovery path is: admin key
 # (on a laptop) → decrypt from git → open the repo. It does not depend on the host that died.
+# ## Restoring
+#
+# Verified end to end on 2026-08-07, not merely designed. Restored `main` matched live at
+# e746dd6b062c across 2,997 commits, docs/planning came back intact, and the checkpoint
+# database passed integrity_check with all 32 projects.
+#
+#   export BORG_PASSCOMMAND="cat /run/secrets/borg/passphrase"   # or sops -d from git
+#   export BORG_RSH="ssh -i /run/secrets/borg/ssh_key"
+#   R=ssh://u627005@u627005.your-storagebox.de:23/./cresset-internal
+#   borg list "$R"                                   # pick an archive
+#   borg extract "$R::<archive>" var/lib/borg-stage  # extracts under $PWD
+#   git clone --bare var/lib/borg-stage/cresset.bundle cresset.git
+#
+# From a DEAD host, the credentials come from git instead: the secrets are encrypted to the
+# admin age keys as well as this host's, so `sops -d --extract '["borg"]["passphrase"]'
+# secrets/internal.yaml` on a laptop opens the repo. That is the whole point of keeping them
+# there rather than in /root.
+#
+# The Storage Box is `reachable_externally = false`, so a restore has to run from inside
+# Hetzner's network — from a replacement host, or from telemetry, which already has access.
 { config, pkgs, ... }:
 let
   stage = "/var/lib/borg-stage";
