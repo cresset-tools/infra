@@ -417,10 +417,6 @@ in
     after = [ "srv.mount" ];
     requires = [ "cresset-sync-setup.service" ];
     unitConfig.RequiresMountsFor = "/srv";
-    # Never concurrently with a pass: gc rewrites packs the worker may be reading, and an
-    # export mid-fetch owns tmp_* files that `--prune=now` would otherwise be entitled to
-    # delete out from under it.
-    conflicts = [ "cresset-sync.service" ];
     serviceConfig = {
       Type = "oneshot";
       User = user;
@@ -429,7 +425,23 @@ in
       # writing here must leave group-writable objects behind or the next pass fails with
       # "unable to migrate objects to permanent storage".
       UMask = "0002";
+      # Serialised against the worker through the worker's OWN lease lock, not through
+      # systemd's `Conflicts=`.
+      #
+      # `Conflicts=` was the first attempt and it is the wrong tool: it STOPS the other unit
+      # rather than waiting for it, so the first gc run killed a pass mid-flight
+      # (`code=killed, status=15/TERM`) and left the service failed. `flock` on the same file
+      # the worker locks makes them take turns instead -- gc waits for the pass to finish, and
+      # a pass that fires while gc is running finds the lease held and skips that tick.
+      #
+      # Waiting rather than skipping, because a gc that gives up quietly is a gc that never
+      # runs on a busy worker, which is exactly how the disk filled. Fifteen minutes is far
+      # beyond a pass (~20s) and short of the daily cadence; failing to acquire in that window
+      # means something is stuck and should be visible in `systemctl --failed`.
       ExecStart = pkgs.writeShellScript "cresset-sync-gc" ''
+        set -u
+        exec ${pkgs.util-linux}/bin/flock --exclusive --timeout 900 ${syncDir}/lease.lock \
+          ${pkgs.writeShellScript "cresset-sync-gc-locked" ''
         set -u
         failed=0
         for repo in ${syncDir}/mirrors/*.git; do
@@ -447,6 +459,7 @@ in
         done
         ${pkgs.coreutils}/bin/df -h ${syncDir} | ${pkgs.coreutils}/bin/tail -1
         exit "$failed"
+        ''}
       '';
       NoNewPrivileges = true;
       ProtectSystem = "strict";
