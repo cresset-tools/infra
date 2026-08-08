@@ -715,11 +715,23 @@ async fn diff(
             .iter()
             .map(|entry| entry.path.as_internal_file_string().to_owned())
             .collect();
+        // Where to start the stream. An exact path first; failing that, the first change UNDER
+        // it, so a directory works.
+        //
+        // Directories used to 400 with "requested path is not changed in this revision", which
+        // is both unhelpful and, for a directory that plainly does contain changes, untrue. It
+        // reads as though the viewer disagrees with you about the repository.
         let start_index = match query.path {
-            Some(requested_path) => paths
-                .iter()
-                .position(|path| path == &requested_path)
-                .ok_or_else(|| anyhow!("requested path is not changed in this revision"))?,
+            Some(requested_path) => {
+                let prefix = format!("{}/", requested_path.trim_end_matches('/'));
+                paths
+                    .iter()
+                    .position(|path| path == &requested_path)
+                    .or_else(|| paths.iter().position(|path| path.starts_with(&prefix)))
+                    .ok_or_else(|| {
+                        anyhow!("nothing under {requested_path} changed in this revision")
+                    })?
+            }
             None => 0,
         };
         Ok((loaded, commit, entries, paths, start_index))

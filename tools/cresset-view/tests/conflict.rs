@@ -1,4 +1,4 @@
-//! The conflicted-path endpoint, against a real jj conflict.
+//! The revision endpoints, against a real jj repository.
 //!
 //! This is the screen the sync worker's escalation path arrives at: the worker pauses every
 //! project, Telegram carries a pointer to exactly this URL, and until 2026-08-08 the answer was
@@ -138,9 +138,27 @@ impl Server {
         panic!("cresset-view did not become ready");
     }
 
+    /// The status code and body of a GET, for cases where the failure is the point.
+    fn get_status(&self, path: &str) -> (u16, String) {
+        let raw = self.request(path).unwrap_or_default();
+        let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
+        let status = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0);
+        (status, body.to_string())
+    }
+
     /// A minimal HTTP/1.1 GET. Deliberately dependency-free: pulling in an HTTP client to make
     /// one request against our own server would be more moving parts than the request.
     fn get(&self, path: &str) -> Option<String> {
+        let raw = self.request(path)?;
+        let (head, body) = raw.split_once("\r\n\r\n")?;
+        head.starts_with("HTTP/1.1 200").then(|| body.to_string())
+    }
+
+    fn request(&self, path: &str) -> Option<String> {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port)).ok()?;
         stream
             .write_all(
@@ -153,8 +171,7 @@ impl Server {
             .ok()?;
         let mut response = String::new();
         stream.read_to_string(&mut response).ok()?;
-        let (head, body) = response.split_once("\r\n\r\n")?;
-        head.starts_with("HTTP/1.1 200").then(|| body.to_string())
+        Some(response)
     }
 }
 
@@ -239,5 +256,53 @@ fn an_ordinary_path_carries_no_conflict() {
     assert!(
         value["contents"].as_str().unwrap_or("").contains("base"),
         "a clean path still serves its contents: {value}"
+    );
+}
+
+/// A DIRECTORY is a legitimate thing to ask a diff for.
+///
+/// Asking for one used to fail with `400 requested path is not changed in this revision`, which
+/// is both unhelpful and — for a directory that plainly does contain changes — untrue; it reads
+/// as though the viewer disagrees with you about the repository. Worse, the frontend rethrew the
+/// failure into a `void`-ed call, so the pane sat at "Loading comparison…" for ever while the
+/// console collected an unhandled rejection.
+#[test]
+fn a_diff_can_start_at_a_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    jj(dir.path(), &["git", "init", "--colocate", "."]);
+    std::fs::create_dir_all(dir.path().join("nested/deeper")).expect("mkdir");
+    std::fs::write(dir.path().join("nested/deeper/a.txt"), "one\n").expect("write");
+    jj(dir.path(), &["commit", "-m", "add a nested file"]);
+    std::fs::write(dir.path().join("nested/deeper/a.txt"), "two\n").expect("write");
+    jj(dir.path(), &["commit", "-m", "change it"]);
+    let changed = jj(
+        dir.path(),
+        &["log", "-r", "@-", "--no-graph", "-T", "commit_id"],
+    );
+
+    let server = Server::start(dir.path());
+
+    // The exact file still works.
+    let (status, _) = server.get_status(&format!(
+        "/api/revisions/{changed}/diff?path=nested%2Fdeeper%2Fa.txt"
+    ));
+    assert_eq!(status, 200, "an exact path must work");
+
+    // ...and so must each directory above it.
+    for directory in ["nested", "nested%2Fdeeper", "nested%2F"] {
+        let (status, body) =
+            server.get_status(&format!("/api/revisions/{changed}/diff?path={directory}"));
+        assert_eq!(
+            status, 200,
+            "a diff starting at directory {directory:?} must be served, got {status}: {body}"
+        );
+    }
+
+    // A path with genuinely nothing under it is still an error — and says so in those terms.
+    let (status, body) = server.get_status(&format!("/api/revisions/{changed}/diff?path=absent"));
+    assert_eq!(status, 400, "an unchanged path is still a client error");
+    assert!(
+        body.contains("nothing under absent changed"),
+        "the message must name what was actually asked for: {body}"
     );
 }

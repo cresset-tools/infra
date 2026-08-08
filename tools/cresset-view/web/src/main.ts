@@ -452,7 +452,15 @@ async function loadRevision(revision: Revision, requestedPath: string | null = n
   if (currentMode === 'browse') {
     fileHeading.textContent = 'Loading files…';
     content.innerHTML = '<p class="empty-state">Select a file to view its contents.</p>';
-    const result = await fetchJson<TreeResponse>(`/api/revisions/${revision.commit_id}/tree`);
+    let result: TreeResponse;
+    try {
+      result = await fetchJson<TreeResponse>(`/api/revisions/${revision.commit_id}/tree`);
+    } catch (error) {
+      if (generation !== selectionGeneration) return;
+      fileHeading.textContent = 'Files';
+      renderLoadFailure(`the file list for ${short(revision.change_id)}`, error);
+      return;
+    }
     if (generation !== selectionGeneration) return;
     const preparedInput = prepareFileTreeInput(result.paths.map((entry) => entry.path), {
       flattenEmptyDirectories: false,
@@ -547,9 +555,16 @@ async function showFile(revision: Revision, path: string) {
   renderedFile?.cleanUp();
   renderedFile = null;
   content.innerHTML = `<p class="empty-state">Loading <code>${escapeHtml(path)}</code>…</p>`;
-  const result = await fetchJson<FileResponse>(
-    `/api/revisions/${revision.commit_id}/file?path=${encodeURIComponent(path)}`,
-  );
+  let result: FileResponse;
+  try {
+    result = await fetchJson<FileResponse>(
+      `/api/revisions/${revision.commit_id}/file?path=${encodeURIComponent(path)}`,
+    );
+  } catch (error) {
+    if (generation !== fileGeneration) return;
+    renderLoadFailure(path, error);
+    return;
+  }
   if (generation !== fileGeneration || revision.commit_id !== currentRevision?.commit_id || currentMode !== 'browse') return;
   operation.textContent = `operation ${short(result.operation_id)}`;
   content.replaceChildren();
@@ -738,8 +753,38 @@ function pierreThemeType(): ThemeTypes {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw new Error(await readError(response));
   return response.json() as Promise<T>;
+}
+
+/// The server's message for a failed response, unwrapped from its JSON envelope.
+///
+/// Errors used to reach the UI as the raw body — `{"error":"requested path is not changed in
+/// this revision"}` — which is a readable sentence wearing punctuation that says "internal".
+async function readError(response: Response): Promise<string> {
+  const body = await response.text().catch(() => '');
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown };
+    if (typeof parsed.error === 'string' && parsed.error !== '') return parsed.error;
+  } catch {
+    // Not JSON. The raw body, or the status, is still better than nothing.
+  }
+  return body.trim() !== '' ? body.trim() : `${response.status} ${response.statusText}`;
+}
+
+/// Show a failure in the content pane instead of leaving the last "Loading…" on screen.
+///
+/// Every load path used to rethrow into a `void`-ed call, so a failed fetch became an unhandled
+/// rejection: the console got a stack trace and the pane sat at "Loading comparison…" for ever.
+/// A viewer that stops without saying so is worse than one that says it cannot do the thing,
+/// because the reader has no way to tell it apart from slow.
+function renderLoadFailure(what: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  content.innerHTML = `
+    <section class="file-message">
+      <h3>Could not load ${escapeHtml(what)}</h3>
+      <p>${escapeHtml(message)}</p>
+    </section>`;
 }
 
 async function streamDiff(
