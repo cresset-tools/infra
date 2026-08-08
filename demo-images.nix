@@ -2,45 +2,16 @@
 # Consumed by flake.nix `packages.x86_64-linux` and loaded by hosts/demo via
 # `virtualisation.oci-containers … imageFile` (no registry).
 #
-# `pkgs` must carry the rust-overlay (for rustc 1.96, which nixpkgs doesn't ship
-# yet — pinned from sconce's own rust-toolchain.toml).
+# sconce is NOT built here. cresset-tools/sconce publishes a multi-arch, attested
+# image to ghcr.io/cresset-tools/sconce on every release (its build-docker.yml),
+# so rebuilding it from source was duplicated work whose only real effect was a
+# hand-edited `rev`/`hash` pin. That pin is invisible to `update-flake-lock`, and
+# it went stale: the console served "powered by the sconce engine" for two weeks
+# after that branding was removed, because nobody bumped it. The hosts now pull
+# the published tag directly — see hosts/bougierepo and hosts/demo.
 { pkgs }:
 let
   lib = pkgs.lib;
-
-  # ---- sconce (public repo, EUPL-1.2) — pure-rustls, tiny image ----
-  sconceSrc = pkgs.fetchFromGitHub {
-    owner = "cresset-tools";
-    repo = "sconce";
-    rev = "5f782a565cacb230bf65d9c5cdf9a62f2ba35525";
-    hash = "sha256-+9BtV7IeSx15cCDfyaGBSRaTFtwYMaAAFXjZwwenV7Y=";
-  };
-  rustToolchain = pkgs.rust-bin.fromRustupToolchainFile "${sconceSrc}/rust-toolchain.toml";
-  rustPlatform = pkgs.makeRustPlatform { cargo = rustToolchain; rustc = rustToolchain; };
-  sconce = rustPlatform.buildRustPackage {
-    pname = "sconce";
-    version = "0.6.0";
-    src = sconceSrc;
-    cargoLock.lockFile = "${sconceSrc}/Cargo.lock";
-    cargoBuildFlags = [ "--bin" "sconce" ];
-    doCheck = false;
-  };
-
-  sconceImage = pkgs.dockerTools.buildLayeredImage {
-    name = "sconce";
-    tag = "demo";
-    contents = [ sconce pkgs.gitMinimal pkgs.cacert ];
-    config = {
-      Entrypoint = [ "${sconce}/bin/sconce" ];
-      Cmd = [
-        "serve" "--cas" "/var/lib/sconce/cas"
-        "--listen" "0.0.0.0:8080" "--base-url" "https://repo.bougie.tools"
-      ];
-      Env = [ "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
-      Volumes = { "/var/lib/sconce/cas" = { }; };
-      ExposedPorts = { "8080/tcp" = { }; };
-    };
-  };
 
   # ---- Magento runtime: php84-fpm + nginx (app tree is host state, mounted) ----
   phpRuntime = pkgs.php84.buildEnv {
@@ -176,5 +147,5 @@ let
   };
 in
 {
-  inherit sconce sconceImage phpRuntime magentoImage;
+  inherit phpRuntime magentoImage;
 }

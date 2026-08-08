@@ -3,12 +3,16 @@
 # cresset Composer package with a Mollie test payment, get a license key +
 # install instructions, install the gated package from a private repo" demo.
 #
-# Two Nix-built OCI images run under rootful podman (see ../../demo-images.nix,
-# exposed as inputs.self.packages.<system>.{sconceImage,magentoImage}):
+# Two OCI images run under rootful podman:
 #   - sconce      — the Composer v2 repo server (public, EUPL-1.2), behind
 #                   repo.bougie.tools; issues/serves the licensed packages.
+#                   Pulled from ghcr.io/cresset-tools/sconce, which its own
+#                   release CI publishes — not built here (see ../../demo-images.nix
+#                   for why the old source pin was dropped).
 #   - magento     — the storefront (Mage-OS 3.1.0), behind demo.bougie.tools;
-#                   the app tree itself is host state mounted in (see below).
+#                   Nix-built (../../demo-images.nix, exposed as
+#                   inputs.self.packages.<system>.magentoImage); the app tree
+#                   itself is host state mounted in (see below).
 #
 # The datastores are classic NixOS services on the host, NOT containers
 # (modular `system.services.*` don't cover postgres/mariadb/opensearch/redis
@@ -19,7 +23,7 @@
 # with this box's SSH host key). Nothing secret is in the Nix store or git.
 { config, pkgs, lib, inputs, ... }:
 let
-  # Images built by the flake's `packages.<system>` (with the rust-overlay).
+  # Images built by the flake's `packages.<system>`.
   # This host is x86_64-linux, the only system those packages are built for.
   demoImages = inputs.self.packages.${pkgs.stdenv.hostPlatform.system};
 
@@ -503,8 +507,13 @@ in
   # + `current` symlink), owned by the magento build/serve user. The container
   # mounts the whole /var/lib/magento and serves `current`.
   systemd.tmpfiles.rules = [
+    # uid 10001 is the unprivileged `sconce` user baked into the published
+    # image; the Nix image it replaced ran as root. Rootful podman maps that
+    # straight onto the host uid, so the CAS must be owned by it. `Z` recursively
+    # re-owns objects the old root-running image already wrote.
     "d /var/lib/sconce                 0755 root    root    -"
-    "d /var/lib/sconce/cas             0755 root    root    -"
+    "d /var/lib/sconce/cas             0755 10001   10001   -"
+    "Z /var/lib/sconce/cas             0755 10001   10001   -"
     "d /var/lib/magento                0755 magento magento -"
     "d /var/lib/magento/releases       0755 magento magento -"
     "d /var/lib/magento/shared         0755 magento magento -"
@@ -520,10 +529,24 @@ in
   virtualisation.oci-containers = {
     backend = "podman";
     containers.sconce = {
-      image = "sconce:demo";
-      imageFile = demoImages.sconceImage;
+      image = "ghcr.io/cresset-tools/sconce:latest";
+      # `newer` (not `always`) so a GHCR outage falls back to the locally
+      # cached image instead of refusing to start. See hosts/bougierepo.
+      pull = "newer";
       autoStart = true;
       extraOptions = [ "--network=host" ];
+      # Spelled out rather than inherited from the image. The Nix image this
+      # replaced defaulted to `--base-url https://repo.bougie.tools` and bound
+      # only 8080; the published image's CMD defaults to a localhost base-url
+      # and also binds 8081. Taking the image default here would have silently
+      # rewritten every packages.json/dist URL the demo hands out, and collided
+      # with sconce-ui's listener.
+      cmd = [
+        "serve"
+        "--cas" "/var/lib/sconce/cas"
+        "--listen" "0.0.0.0:8080"
+        "--base-url" "https://repo.bougie.tools"
+      ];
       volumes = [ "/var/lib/sconce/cas:/var/lib/sconce/cas" ];
       environmentFiles = [ config.sops.templates."sconce-env".path ];
     };
@@ -532,8 +555,10 @@ in
     # by HTTP basic auth (any username; the sops admin_password). Loopback-only
     # — nginx terminates TLS and proxies to it.
     containers.sconce-ui = {
-      image = "sconce:demo";
-      imageFile = demoImages.sconceImage;
+      image = "ghcr.io/cresset-tools/sconce:latest";
+      # `newer` (not `always`) so a GHCR outage falls back to the locally
+      # cached image instead of refusing to start. See hosts/bougierepo.
+      pull = "newer";
       autoStart = true;
       extraOptions = [ "--network=host" ];
       cmd = [

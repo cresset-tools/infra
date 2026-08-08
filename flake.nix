@@ -20,11 +20,6 @@
       url = "github:nix-community/nixos-anywhere";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # rustc 1.96 for sconce (nixpkgs default lags; pinned from its toolchain file).
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     # Encrypted secrets for hosts/demo (the flake's first secrets framework).
     sops-nix = {
       url = "github:Mic92/sops-nix";
@@ -71,7 +66,7 @@
     };
   };
 
-  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, rust-overlay, sops-nix, bougie-relay, cresset-sync, deploy-rs }:
+  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, sops-nix, bougie-relay, cresset-sync, deploy-rs }:
     let
       # CAX11 is aarch64. The deploy/switch helper apps run on the
       # operator's laptop too, so we expose them on both common arches.
@@ -84,8 +79,6 @@
           (final: prev: {
             nix = determinate.inputs.nix.packages.${system}.default;
           })
-          # rust-bin.* for pinning sconce's rustc 1.96 (see demo-images.nix).
-          rust-overlay.overlays.default
         ];
       };
       # The flakeref the deploy/switch apps hand to nixos-anywhere/nixos-rebuild.
@@ -181,11 +174,12 @@
       };
 
       # Nix-built OCI images for the demo host (built here, loaded via
-      # oci-containers imageFile). Also `nix build .#sconceImage` to inspect.
+      # oci-containers imageFile). sconce is not among them — it comes from
+      # ghcr.io/cresset-tools/sconce, pulled by tag (see demo-images.nix).
       packages.${system} =
         let images = import ./demo-images.nix { inherit pkgs; };
         in {
-          inherit (images) sconce sconceImage phpRuntime magentoImage;
+          inherit (images) phpRuntime magentoImage;
           cresset-view = import ./tools/cresset-view/package.nix { inherit pkgs; };
         };
 

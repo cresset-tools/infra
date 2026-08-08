@@ -10,20 +10,22 @@
 # this shared secret, so it is rendered into the sconce env alongside the
 # secret key.
 #
-# The sconce OCI image is Nix-built by the flake (../../demo-images.nix, exposed
-# as inputs.self.packages.<system>.sconceImage) and run under rootful podman
-# with --network=host, reaching postgres on 127.0.0.1. nginx terminates TLS and
-# proxies to the sconce API on 127.0.0.1:8080.
+# The sconce OCI image is the one cresset-tools/sconce publishes to GHCR on every
+# release (multi-arch, provenance-attested), pulled by the rolling `latest` tag
+# and run under rootful podman with --network=host, reaching postgres on
+# 127.0.0.1. nginx terminates TLS and proxies to the sconce API on 127.0.0.1:8080.
+#
+# Deliberately NOT pinned here: this used to be a Nix build off a hand-written
+# `rev`/`hash` in ../../demo-images.nix, which `update-flake-lock` cannot see, so
+# it silently rotted (the console served branding that had been removed two weeks
+# earlier). Releasing sconce is now the whole deploy: release-please cuts the tag,
+# build-docker.yml publishes it, and this host picks it up on the next restart of
+# podman-sconce.service. Rollback = point `image` at an explicit version tag.
 #
 # Secrets come from sops-nix (../../secrets/bougierepo.yaml, decrypted at
 # activation with this box's SSH host key). Nothing secret lands in the Nix
 # store or git.
 { config, pkgs, lib, inputs, ... }:
-let
-  # Image built by the flake's `packages.<system>` (with the rust-overlay).
-  # This host is x86_64-linux, the only system that package is built for.
-  sconceImage = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.sconceImage;
-in
 {
   imports = [
     inputs.sops-nix.nixosModules.sops
@@ -174,9 +176,16 @@ in
 
   # Host-state dir for sconce's content-addressed store (CAS), mounted into the
   # container.
+  # The published image runs as uid 10001 (`useradd --system --uid 10001 sconce`
+  # in its Dockerfile); the Nix-built image it replaces ran as root. Under
+  # ROOTFUL podman that uid is the host uid, so a root-owned CAS would leave
+  # sconce unable to write a single object. `Z` recursively re-owns what the
+  # previous image already wrote there as root — plain `d` only applies to the
+  # directory it creates, which would have left the existing CAS unreadable.
   systemd.tmpfiles.rules = [
-    "d /var/lib/sconce      0755 root root -"
-    "d /var/lib/sconce/cas  0755 root root -"
+    "d /var/lib/sconce      0755 root  root  -"
+    "d /var/lib/sconce/cas  0755 10001 10001 -"
+    "Z /var/lib/sconce/cas  0755 10001 10001 -"
   ];
 
   # ---- Container (rootful podman, host network) ----
@@ -184,8 +193,18 @@ in
   virtualisation.oci-containers = {
     backend = "podman";
     containers.sconce = {
-      image = "sconce:demo";
-      imageFile = sconceImage;
+      image = "ghcr.io/cresset-tools/sconce:latest";
+      # Re-resolve the rolling tag on every service start, so restarting the
+      # unit (or rebooting the box) is what rolls a new sconce release out.
+      # Without this podman keeps whatever it pulled first and `latest` would
+      # be a lie after the first start.
+      #
+      # `newer`, not `always`: both pick up a new release, but `always` makes a
+      # reachable GHCR a hard precondition for starting — a registry outage or
+      # a network blip during a reboot would leave the box's own registry down
+      # with a perfectly good image sitting in local storage. `newer` pulls when
+      # it can and falls back to that local image when it cannot.
+      pull = "newer";
       autoStart = true;
       extraOptions = [ "--network=host" ];
       # Registry/identity split (brand: registry = bougierepo.com, identity /
