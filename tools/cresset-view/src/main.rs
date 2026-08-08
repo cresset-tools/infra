@@ -18,6 +18,11 @@ use futures::{AsyncReadExt, SinkExt, StreamExt, TryStreamExt};
 use jj_lib::backend::TreeValue;
 use jj_lib::commit::Commit;
 use jj_lib::config::StackedConfig;
+use jj_lib::conflict_labels::ConflictLabels;
+use jj_lib::conflicts::{
+    ConflictMarkerStyle, ConflictMaterializeOptions, MaterializedTreeValue,
+    materialize_merge_result_to_bytes, materialize_tree_value,
+};
 use jj_lib::matchers::EverythingMatcher;
 use jj_lib::merge::MergedTreeValue;
 use jj_lib::object_id::ObjectId;
@@ -25,6 +30,7 @@ use jj_lib::repo::{ReadonlyRepo, Repo, StoreFactories};
 use jj_lib::repo_path::RepoPath;
 use jj_lib::revset::{RevsetExpression, RevsetStreamExt};
 use jj_lib::settings::UserSettings;
+use jj_lib::tree_merge::MergeOptions;
 use jj_lib::workspace::{Workspace, default_working_copy_factories};
 use serde::{Deserialize, Serialize};
 use tower_http::compression::CompressionLayer;
@@ -161,6 +167,44 @@ struct FileResponse {
     path: String,
     contents: Option<String>,
     conflicted: bool,
+    binary: bool,
+    /// The conflict, when the path has one and its terms are readable.
+    ///
+    /// Previously the API said only `conflicted: true` and returned no content, so the viewer
+    /// could say a conflict existed and nothing more. That is the screen the sync worker's
+    /// whole escalation path arrives at — Telegram carries a pointer here, and every project
+    /// stays paused until someone acts on it — so "there is a conflict" was an answer that
+    /// sent the reader to ssh and `jj` for the actual question.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conflict: Option<ConflictView>,
+}
+
+/// A conflicted path, decomposed the way a person reads it.
+#[derive(Serialize)]
+struct ConflictView {
+    /// The common ancestors. A normal 3-way merge has exactly one.
+    bases: Vec<ConflictTerm>,
+    /// The competing versions. A normal 3-way merge has two.
+    sides: Vec<ConflictTerm>,
+    /// jj's own materialisation: the conflict-marker text it would write into a working copy.
+    ///
+    /// Kept alongside the decomposed terms because it is what `jj` shows and what a resolver
+    /// actually edits, so it is the form to compare against when checking whether a proposed
+    /// resolution matches. `None` when a term is binary or oversized.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    materialized: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ConflictTerm {
+    /// jj's own label for this term, when it has one — e.g. the operation that produced it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    /// `None` for a term that is binary, oversized, or absent (a delete on one side).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    contents: Option<String>,
+    /// The term does not exist on this side — one side deleted the file.
+    absent: bool,
     binary: bool,
 }
 
@@ -777,6 +821,22 @@ async fn file(
             bail!("path does not exist in revision");
         }
         let conflicted = !value.is_resolved();
+        let conflict = if conflicted {
+            // The COMMIT's labels, not `unlabeled()`. A commit carries the labels for its own
+            // conflict shape (`Commit::tree`), and `materialize_tree_value` simplifies them to
+            // match the per-path merge. Without them every side is an anonymous "side #1",
+            // which is the difference between "two versions differ" and "the monorepo says
+            // this, the downstream says that".
+            read_conflict(
+                loaded.repo.as_ref(),
+                repo_path,
+                value.clone(),
+                commit.tree().labels().clone(),
+            )
+            .await?
+        } else {
+            None
+        };
         let contents = read_text_value(loaded.repo.as_ref(), repo_path, value).await?;
         let binary = matches!(contents, FileContents::Binary);
 
@@ -788,6 +848,7 @@ async fn file(
             contents: contents.into_text(),
             conflicted,
             binary,
+            conflict,
         })
     })
     .await?;
@@ -901,6 +962,84 @@ impl FileContents {
             Self::Missing | Self::Binary => None,
         }
     }
+}
+
+/// Decompose a conflicted path into its bases and sides, plus jj's own materialisation.
+///
+/// Everything here comes from `materialize_tree_value`, which is the same call jj makes when
+/// writing a conflict into a working copy — so what the viewer shows is what `jj` would show,
+/// rather than a second implementation of conflict rendering that could drift from it.
+///
+/// Returns `None` rather than erroring for conflicts that are not file conflicts (a file
+/// against a directory, say). Those are real and worth not crashing on, but they have no
+/// side-by-side reading, and the caller still reports the path as conflicted.
+async fn read_conflict(
+    repo: &ReadonlyRepo,
+    path: &RepoPath,
+    value: MergedTreeValue,
+    labels: ConflictLabels,
+) -> Result<Option<ConflictView>> {
+    let materialized = materialize_tree_value(repo.store(), path, value, &labels).await?;
+    let MaterializedTreeValue::FileConflict(conflict) = materialized else {
+        return Ok(None);
+    };
+
+    // `Merge` stores terms interleaved (side, base, side, ...); `adds()`/`removes()` separate
+    // them. Labels are a parallel `Merge<String>` with the same shape, so they zip term for term.
+    let labels = conflict.labels.as_merge().clone();
+    let term = |contents: &[u8], label: Option<&String>| {
+        let bytes = contents;
+        let oversized = bytes.len() > MAX_FILE_BYTES;
+        let text = if oversized || bytes.contains(&0) {
+            None
+        } else {
+            String::from_utf8(bytes.to_vec()).ok()
+        };
+        ConflictTerm {
+            label: label.filter(|value| !value.is_empty()).cloned(),
+            binary: text.is_none() && !oversized,
+            // An empty term is how a merge represents "absent on this side" — a delete.
+            absent: bytes.is_empty(),
+            contents: text,
+        }
+    };
+
+    let mut label_sides = labels.adds();
+    let sides: Vec<_> = conflict
+        .contents
+        .adds()
+        .map(|contents| term(contents.as_ref(), label_sides.next()))
+        .collect();
+    let mut label_bases = labels.removes();
+    let bases: Vec<_> = conflict
+        .contents
+        .removes()
+        .map(|contents| term(contents.as_ref(), label_bases.next()))
+        .collect();
+
+    // The marker text jj itself writes. `Snapshot` shows every base and side in full, which is
+    // the readable form for someone deciding between them; the `Diff` default is more compact
+    // but assumes the reader already knows what changed.
+    let settings = UserSettings::from_config(StackedConfig::with_defaults())?;
+    let options = ConflictMaterializeOptions {
+        marker_style: ConflictMarkerStyle::Snapshot,
+        marker_len: None,
+        merge: MergeOptions::from_settings(&settings)?,
+    };
+    let rendered =
+        materialize_merge_result_to_bytes(&conflict.contents, &conflict.labels, &options);
+    let rendered: &[u8] = rendered.as_ref();
+    let materialized = if rendered.len() > MAX_FILE_BYTES || rendered.contains(&0) {
+        None
+    } else {
+        String::from_utf8(rendered.to_vec()).ok()
+    };
+
+    Ok(Some(ConflictView {
+        bases,
+        sides,
+        materialized,
+    }))
 }
 
 async fn read_text_value(

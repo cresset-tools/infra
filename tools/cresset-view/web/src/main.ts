@@ -71,6 +71,20 @@ interface FileResponse {
   contents: string | null;
   conflicted: boolean;
   binary: boolean;
+  conflict?: ConflictView;
+}
+
+interface ConflictTerm {
+  label?: string;
+  contents?: string;
+  absent: boolean;
+  binary: boolean;
+}
+
+interface ConflictView {
+  bases: ConflictTerm[];
+  sides: ConflictTerm[];
+  materialized?: string;
 }
 
 type ViewMode = 'browse' | 'changes';
@@ -545,7 +559,7 @@ async function showFile(revision: Revision, path: string) {
     return;
   }
   if (result.conflicted) {
-    content.innerHTML = `<section class="file-message"><h3>${escapeHtml(path)}</h3><p>This path contains an unresolved jj conflict.</p></section>`;
+    renderConflict(path, result.conflict);
     return;
   }
 
@@ -886,4 +900,69 @@ async function renderSyncStatus(): Promise<void> {
 
   syncBanner.innerHTML = parts.join('');
   syncBanner.hidden = false;
+}
+
+/// Render a conflicted path.
+///
+/// This screen used to say "This path contains an unresolved jj conflict." and stop, which is
+/// where the whole escalation path arrives: the worker pauses every project, Telegram carries a
+/// pointer to exactly this URL, and the reader was then told only that the thing they had come
+/// to look at existed. The point of showing the sides is that the decision — which version
+/// wins, or what merge of them does — is the one thing a person is here to make.
+function renderConflict(path: string, conflict: ConflictView | undefined) {
+  const section = document.createElement('section');
+  section.className = 'conflict-view';
+
+  if (conflict == null) {
+    // A conflict the backend could not decompose — a file against a directory, say. Rare, real,
+    // and not a reason to fail: say what is known rather than pretending it is a normal file.
+    section.innerHTML = `
+      <h3>${escapeHtml(path)}</h3>
+      <p class="conflict-note">This path is conflicted in a form with no side-by-side reading
+      (for example a file on one side and a directory on the other). Inspect it with
+      <code>jj</code>.</p>`;
+    content.replaceChildren(section);
+    return;
+  }
+
+  const terms = [
+    ...conflict.bases.map((term) => ({ term, kind: 'base' as const })),
+    ...conflict.sides.map((term) => ({ term, kind: 'side' as const })),
+  ];
+  const sideCount = conflict.sides.length;
+  const baseCount = conflict.bases.length;
+
+  section.innerHTML = `
+    <h3>${escapeHtml(path)}</h3>
+    <p class="conflict-note">
+      Unresolved conflict: ${sideCount} competing version${sideCount === 1 ? '' : 's'}
+      over ${baseCount} common ancestor${baseCount === 1 ? '' : 's'}.
+      Synchronization is paused for every project until it is resolved.
+    </p>
+    <div class="conflict-terms">
+      ${terms.map(({ term, kind }) => `
+        <figure class="conflict-term ${kind}">
+          <figcaption>
+            <span class="conflict-kind">${kind === 'base' ? 'ancestor' : 'version'}</span>
+            ${term.label == null ? '' : `<code>${escapeHtml(term.label)}</code>`}
+          </figcaption>
+          ${conflictTermBody(term)}
+        </figure>`).join('')}
+    </div>
+    ${conflict.materialized == null ? '' : `
+      <details class="conflict-materialized">
+        <summary>As jj writes it into a working copy</summary>
+        <pre>${escapeHtml(conflict.materialized)}</pre>
+      </details>`}
+  `;
+  content.replaceChildren(section);
+}
+
+function conflictTermBody(term: ConflictTerm): string {
+  // An absent term is a DELETE on that side, and reading it as "empty file" would hide the
+  // actual disagreement — one side removed the path, the other changed it.
+  if (term.absent) return '<p class="conflict-empty">does not exist on this side</p>';
+  if (term.binary) return '<p class="conflict-empty">binary</p>';
+  if (term.contents == null) return '<p class="conflict-empty">too large to display</p>';
+  return `<pre>${escapeHtml(term.contents)}</pre>`;
 }

@@ -39,6 +39,10 @@ pkgs.rustPlatform.buildRustPackage {
       ./Cargo.toml
       ./Cargo.lock
       ./src
+      # Without this the integration tests are simply absent from the sandbox and `cargo test`
+      # reports success having run only the unit tests in src/. A checked-in test that CI cannot
+      # see is worse than no test, because the green tick says otherwise.
+      ./tests
     ];
   };
   cargoLock = {
@@ -51,5 +55,9 @@ pkgs.rustPlatform.buildRustPackage {
     mkdir -p $out/share/cresset-view
     cp -r ${web}/* $out/share/cresset-view/
   '';
+  # `tests/conflict.rs` builds its fixture with the `jj` CLI, the same way cresset-sync's tests
+  # drive `git`: a conflict made through the interface a person uses is the shape they will
+  # actually meet. Without this the test silently fails to find `jj` in the sandbox.
+  nativeCheckInputs = [ pkgs.jujutsu ];
   doCheck = true;
 }
