@@ -242,6 +242,78 @@ in
     };
   };
 
+    # Keep the viewer's repository current.
+    #
+    # There was no refresh at all. The directory was created once during provisioning and the
+    # viewer served that snapshot unchanged for a week: on 2026-08-08 it still ended at
+    # "feat(infra): rebuild internal" from 1 August while canonical `main` had moved on by
+    # hundreds of commits. The `<operation-id>` directory name and the `current` symlink show
+    # a snapshot-and-swap refresh was intended; only the naming ever got built.
+    #
+    # This mattered beyond stale history. cresset-sync's conflict banner links to
+    # `?revision=<conflict commit>`, and a commit made after the snapshot is not in it -- so for
+    # a week every escalation link pointed at a revision the viewer could not resolve. Telegram
+    # said a human was needed and the link went nowhere.
+    #
+    # Fetching in place rather than snapshot-and-swap: it is a 0.6s local fetch against the bare
+    # repo on the same disk, where a fresh clone is 347M of churn, and the viewer loads the
+    # repository per request so a new operation is visible immediately with no restart. The
+    # `current` symlink stays because the unit path depends on it.
+    systemd.services.cresset-view-refresh = {
+      description = "Fetch the canonical monorepo into the cresset-view repository";
+      after = [ "srv.mount" ];
+      unitConfig.RequiresMountsFor = "/srv";
+      serviceConfig = {
+        Type = "oneshot";
+        User = "cresset-view";
+        Group = "cresset-view";
+        # jj wants somewhere for a per-repo config; without HOME it errors on a path under a
+        # home directory that does not exist and gives up.
+        Environment = [ "JJ_CONFIG=/dev/null" "HOME=/var/lib/cresset-view" ];
+        ExecStart = pkgs.writeShellScript "cresset-view-refresh" ''
+          set -eu
+          repo=/var/lib/cresset-view/repository/current
+          jj="${pkgs.jujutsu}/bin/jj"
+          if [ ! -d "$repo/.jj" ]; then
+            # Self-healing: a unit that only works once someone has made the directory by hand
+            # is not a fix for a directory nobody remembered to keep current.
+            target=/var/lib/cresset-view/repository/bootstrap
+            rm -rf "$target"
+            "$jj" git clone --colocate /srv/git/cresset.git "$target"
+            ln -sfn "$target" "$repo"
+          fi
+          # Over the local path, not the SSH remote the clone was made with: same disk, no
+          # network, and no key for the `git` account that exists only to serve SSH.
+          "$jj" -R "$repo" git remote set-url canonical /srv/git/cresset.git 2>/dev/null || true
+          "$jj" -R "$repo" git fetch --remote canonical
+        '';
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectSystem = "strict";
+        ReadWritePaths = [ "/var/lib/cresset-view" ];
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectControlGroups = true;
+        RestrictNamespaces = true;
+        LockPersonality = true;
+        SystemCallArchitectures = "native";
+        SystemCallFilter = [ "@system-service" "~@privileged" ];
+      };
+    };
+
+    systemd.timers.cresset-view-refresh = {
+      description = "Keep the cresset-view repository within a couple of minutes of canonical";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        # Tighter than the worker's 5-minute reconcile: the viewer is where someone looks AFTER
+        # being told something needs them, so it should not be the slower of the two.
+        OnCalendar = "*:0/2";
+        Persistent = true;
+        RandomizedDelaySec = "20s";
+      };
+    };
+
+
   # git and jujutsu are here for the OPERATOR, not for any service: every unit that
   # needs them already carries its own `path`, and cresset-sync's wrapper pins its own
   # copies deliberately. But this is the box that hosts the canonical monorepo remote,
