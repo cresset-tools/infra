@@ -73,6 +73,11 @@ aside h2 strong { color: var(--text); font-size: 10px; font-weight: 500; letter-
    row in this panel would silently invalidate. */
 .changes { display: flex; flex-direction: column; min-height: 0; }
 .revision-list { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+/* Searching drops the topology graph, so a row has ONE child. Without this it landed in the
+   graph column -- which is 0px wide when there is no graph -- and every result rendered in a
+   29px strip with the author wrapped over three lines. */
+.revision-list.searching .revision { grid-template-columns: minmax(0, 1fr); }
+.revision-list.searching .revision-copy { position: static; border-left: 0; box-shadow: none; }
 .revision-search { display: flex; padding: 8px 14px; border-bottom: 1px solid var(--border-soft); }
 .revision-search input { width: 100%; min-width: 0; padding: 6px 9px; color: inherit; font: inherit; font-size: 12px; background: var(--page-bg, transparent); border: 1px solid var(--border-soft); border-radius: 6px; }
 .revision-search input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
@@ -80,7 +85,11 @@ aside h2 strong { color: var(--text); font-size: 10px; font-weight: 500; letter-
 .revision-more { width: 100%; padding: 11px 14px; color: var(--accent); font: inherit; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; text-align: center; background: var(--panel-bg); border: 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
 .revision-more:hover:not(:disabled) { background: var(--selected-bg); }
 .revision-more:disabled { color: var(--muted); cursor: default; }
-.revision { width: max(100%, calc(var(--graph-width) + 320px)); min-height: 78px; display: grid; grid-template-columns: var(--graph-width) 320px; padding: 0; text-align: left; color: inherit; background: var(--panel-bg); border: 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+/* The text column GROWS into whatever the graph does not need.
+   It was a fixed 320px, so a two-lane graph left ~370px of the row empty while descriptions
+   truncated at "fix(cresset-view): stop the diff worker...". The minmax keeps the 320px floor
+   that makes the sticky column work when the graph is wide enough to scroll. */
+.revision { width: max(100%, calc(var(--graph-width) + 320px)); min-height: 78px; display: grid; grid-template-columns: var(--graph-width) minmax(320px, 1fr); padding: 0; text-align: left; color: inherit; background: var(--panel-bg); border: 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
 .revision:hover, .revision.selected { background: var(--selected-bg); }
 .revision.selected { box-shadow: inset 3px 0 var(--accent); }
 .revision-copy { position: sticky; right: 0; z-index: 2; min-width: 0; display: grid; align-content: center; gap: 5px; padding: 11px 14px; background: var(--panel-bg); border-left: 1px solid var(--border-soft); box-shadow: -12px 0 18px -18px #000; }
@@ -195,3 +204,17 @@ aside h2 strong { color: var(--text); font-size: 10px; font-weight: 500; letter-
 .conflict-terms-detail > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 .conflict-terms-detail .conflict-terms { margin-top: 10px; }
 .conflict-materialized pre { border: 1px solid var(--border-soft); border-radius: 8px; margin-top: 8px; }
+
+/* The revision overview: what fills the detail pane before a file is chosen. The commit body
+   leads, because in this repository the body is where the reasoning is; the facts below it are
+   reference, not reading. */
+.revision-overview { padding: 20px 22px; display: grid; gap: 18px; align-content: start; max-width: 90ch; }
+.revision-body { margin: 0; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--sans, system-ui); color: var(--text); }
+.revision-facts { margin: 0; display: grid; gap: 7px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.revision-facts > div { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; align-items: baseline; }
+.revision-facts dt { color: var(--muted); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+.revision-facts dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.revision-facts code { font: 11px/1.4 "SFMono-Regular", monospace; color: var(--accent); }
+.revision-facts .muted { color: var(--muted); }
+.revision-hint { margin: 0; color: var(--muted); font-size: 12px; }
+.revision-pan[hidden] { display: none; }

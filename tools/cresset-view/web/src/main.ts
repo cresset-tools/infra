@@ -17,6 +17,7 @@ interface Revision {
   parent_commit_ids: string[];
   description: string;
   author_name: string;
+  author_email: string;
   authored_at: string;
   has_conflict: boolean;
   divergent: boolean;
@@ -318,6 +319,12 @@ function appendRevisionRows(revisions: Revision[]) {
   // Set once on the container rather than per row: a later page can widen the graph, and every
   // row has to agree on the column width or the sticky text column stops lining up.
   revisionList.style.setProperty('--graph-width', `${width}px`);
+  // Rows have no graph child while searching, so they need a single-column grid. Carried on the
+  // container so it applies to pages appended later too.
+  revisionList.classList.toggle('searching', searching);
+  // No graph means nothing to pan; leaving the slider visible offers a control that does
+  // nothing, which is worse than not offering it.
+  revisionPan.closest('.revision-pan')?.toggleAttribute('hidden', searching);
 
   const fragment = document.createDocumentFragment();
   for (const [index, revision] of revisions.entries()) {
@@ -328,7 +335,7 @@ function appendRevisionRows(revisions: Revision[]) {
       <span class="revision-copy">
         <span class="revision-id">${revision.working_copy ? '@ · ' : ''}${escapeHtml(short(revision.change_id))}</span>
         <strong>${escapeHtml(firstLine(revision.description) || '(no description)')}</strong>
-        <small>${escapeHtml(revision.author_name)} · ${formatDate(revision.authored_at)}</small>
+        <small>${escapeHtml(revision.author_name)} · ${formatDateTime(revision.authored_at)}</small>
         <span class="signals">
           ${revision.bookmarks.map((name) => `<em>${escapeHtml(name)}</em>`).join('')}
           ${revision.working_copy ? '<em>@</em>' : ''}
@@ -452,7 +459,7 @@ async function loadRevision(revision: Revision, requestedPath: string | null = n
 
   if (currentMode === 'browse') {
     fileHeading.textContent = 'Loading files…';
-    content.innerHTML = '<p class="empty-state">Select a file to view its contents.</p>';
+    renderRevisionOverview(revision);
     let result: TreeResponse;
     try {
       result = await fetchJson<TreeResponse>(`/api/revisions/${revision.commit_id}/tree`);
@@ -518,6 +525,53 @@ async function loadRevision(revision: Revision, requestedPath: string | null = n
   if (!metadataReceived) throw new Error('diff stream did not include metadata');
   fileHeading.textContent = `${diffItems.length.toLocaleString()} changed files`;
   if (diffItems.length === 0) content.innerHTML = '<p class="empty-state">This revision has no file changes.</p>';
+}
+
+/// Fill the detail pane with the revision itself, until a file is chosen.
+///
+/// It used to say "Select a file to view its contents." inside a dashed box occupying most of
+/// the window, while the commit message BODY — the part carrying why the change was made — was
+/// displayed nowhere at all. The heading shows its first line and the rest was unreachable
+/// without leaving the viewer.
+function renderRevisionOverview(revision: Revision) {
+  const lines = revision.description.split('\n');
+  const body = lines.slice(1).join('\n').trim();
+  const chips: string[] = [];
+  if (revision.working_copy) chips.push('<em>working copy</em>');
+  if (revision.is_head) chips.push('<em class="head">head</em>');
+  if (revision.divergent) chips.push('<em class="warning">divergent</em>');
+  if (revision.has_conflict) chips.push('<em class="warning">conflict</em>');
+  for (const name of revision.bookmarks) chips.push(`<em>${escapeHtml(name)}</em>`);
+
+  content.innerHTML = `
+    <section class="revision-overview">
+      ${body === '' ? '' : `<pre class="revision-body">${escapeHtml(body)}</pre>`}
+      <dl class="revision-facts">
+        <div><dt>change</dt><dd><code>${escapeHtml(revision.change_id)}</code></dd></div>
+        <div><dt>commit</dt><dd><code>${escapeHtml(revision.commit_id)}</code></dd></div>
+        <div><dt>author</dt><dd>${escapeHtml(revision.author_name)}
+          &lt;${escapeHtml(revision.author_email)}&gt;</dd></div>
+        <div><dt>authored</dt><dd>${escapeHtml(formatDateTime(revision.authored_at))}</dd></div>
+        <div><dt>parents</dt><dd>${
+          revision.parent_commit_ids.length === 0
+            ? '<span class="muted">none — this is a root</span>'
+            : revision.parent_commit_ids.map((id) => `<code>${escapeHtml(short(id))}</code>`).join(' ')
+        }</dd></div>
+      </dl>
+      ${chips.length === 0 ? '' : `<div class="signals">${chips.join('')}</div>`}
+      <p class="revision-hint">Select a file from the tree to read it at this revision.</p>
+    </section>`;
+}
+
+/// Date and TIME. A repository where a day's work is thirty commits shows thirty identical
+/// dates, which orders nothing.
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
 }
 
 function renderRevisionHeading(revision: Revision) {
