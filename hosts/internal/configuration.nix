@@ -262,6 +262,11 @@ in
     systemd.services.cresset-view-refresh = {
       description = "Fetch the canonical monorepo into the cresset-view repository";
       after = [ "srv.mount" ];
+      # jj shells out to `git` for parts of the git backend, and a systemd unit has no PATH of
+      # its own. Without this it fails with "Could not execute the git process, found in the OS
+      # path 'git'" -- which names the binary but not the reason, and looks like a missing
+      # package rather than a missing PATH.
+      path = [ pkgs.git ];
       unitConfig.RequiresMountsFor = "/srv";
       serviceConfig = {
         Type = "oneshot";
