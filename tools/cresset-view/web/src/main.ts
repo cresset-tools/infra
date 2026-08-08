@@ -1021,21 +1021,21 @@ function renderConflict(path: string, conflict: ConflictView | undefined) {
       over ${baseCount} common ancestor${baseCount === 1 ? '' : 's'}.
       Synchronization is paused for every project until it is resolved.
     </p>
-    <div class="conflict-terms">
-      ${terms.map(({ term, kind }) => `
-        <figure class="conflict-term ${kind}">
-          <figcaption>
-            <span class="conflict-kind">${kind === 'base' ? 'ancestor' : 'version'}</span>
-            ${term.label == null ? '' : `<code>${escapeHtml(term.label)}</code>`}
-          </figcaption>
-          ${conflictTermBody(term)}
-        </figure>`).join('')}
-    </div>
     ${conflict.materialized == null ? '' : `
-      <details class="conflict-materialized">
-        <summary>As jj writes it into a working copy</summary>
-        <pre>${escapeHtml(conflict.materialized)}</pre>
-      </details>`}
+      <pre class="conflict-markers">${escapeHtml(conflict.materialized)}</pre>`}
+    <details class="conflict-terms-detail">
+      <summary>Each version in full (${terms.length})</summary>
+      <div class="conflict-terms">
+        ${terms.map(({ term, kind }) => `
+          <figure class="conflict-term ${kind}">
+            <figcaption>
+              <span class="conflict-kind">${kind === 'base' ? 'ancestor' : 'version'}</span>
+              ${term.label == null ? '' : `<code>${escapeHtml(term.label)}</code>`}
+            </figcaption>
+            ${conflictTermBody(term)}
+          </figure>`).join('')}
+      </div>
+    </details>
   `;
   content.replaceChildren(section);
 }

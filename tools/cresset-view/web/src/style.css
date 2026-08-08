@@ -187,4 +187,11 @@ aside h2 strong { color: var(--text); font-size: 10px; font-weight: 500; letter-
 .conflict-term pre, .conflict-materialized pre { margin: 0; padding: 11px 13px; overflow-x: auto; font: 12px/1.55 "SFMono-Regular", monospace; white-space: pre; }
 .conflict-empty { margin: 0; padding: 11px 13px; color: var(--muted); font-size: 12px; font-style: italic; }
 .conflict-materialized summary { cursor: pointer; color: var(--muted); font-size: 11px; padding: 4px 0; }
+/* The marker text leads, because it is the form a conflict is recognised in and the one a
+   resolver actually edits. The decomposed versions sit behind a disclosure below it: useful
+   when the markers are dense or a side is binary, noise when they are not. */
+.conflict-markers { margin: 0; padding: 12px 14px; overflow-x: auto; font: 12px/1.55 "SFMono-Regular", monospace; white-space: pre; background: var(--panel-bg); border: 1px solid var(--border-soft); border-radius: 8px; }
+.conflict-terms-detail > summary { cursor: pointer; color: var(--muted); font-size: 11px; padding: 4px 0; }
+.conflict-terms-detail > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.conflict-terms-detail .conflict-terms { margin-top: 10px; }
 .conflict-materialized pre { border: 1px solid var(--border-soft); border-radius: 8px; margin-top: 8px; }
