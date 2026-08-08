@@ -69,7 +69,11 @@ fn conflicted_repo(dir: &Path) -> Fixture {
         &["log", "-r", "@", "--no-graph", "-T", "change_id.short()"],
     );
 
-    jj(dir, &["new", &ours, &theirs, "-m", "merge"]);
+    // Rebase rather than merge, because that is how the worker makes conflicts: it replays
+    // downstream commits onto `main`. It matters for more than realism — a MERGE commit that
+    // only conflicts has an empty diff against its merged parents, so the Changes view has
+    // nothing to show and a test built on one cannot see the defect it is meant to catch.
+    jj(dir, &["rebase", "-s", &theirs, "-d", &ours]);
     let conflicted = jj(
         dir,
         &["log", "-r", "conflicts()", "--no-graph", "-T", "commit_id"],
@@ -304,5 +308,45 @@ fn a_diff_can_start_at_a_directory() {
     assert!(
         body.contains("nothing under absent changed"),
         "the message must name what was actually asked for: {body}"
+    );
+}
+
+/// The Changes view must show a conflicted path AS a conflict, not as a deletion.
+///
+/// The diff stream reported an unresolved side as `null`, so a conflicted file rendered as
+/// though its content had been removed. That is the one view where "what happened to this
+/// file" is the whole question, and it answered with silence — while the Browse view, which
+/// someone reaches second, showed the conflict in full.
+#[test]
+fn a_conflicted_path_shows_its_markers_in_the_diff() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let commit = conflicted_repo(dir.path()).conflicted;
+    let server = Server::start(dir.path());
+
+    let body = server
+        .get(&format!("/api/revisions/{commit}/diff?path=f.txt"))
+        .expect("the diff must be served");
+
+    // The stream is ndjson: metadata first, then one event per file.
+    let file_event = body
+        .lines()
+        .find(|line| line.contains("\"type\":\"file\""))
+        .unwrap_or_else(|| panic!("no file event in the stream: {body}"));
+    let event: serde_json::Value = serde_json::from_str(file_event).expect("valid json");
+
+    assert_eq!(
+        event["conflicted"], true,
+        "the event must say it is conflicted"
+    );
+    let after = event["after"]
+        .as_str()
+        .unwrap_or_else(|| panic!("`after` must not be null for a conflict: {event}"));
+    assert!(
+        after.contains("OURS") && after.contains("THEIRS"),
+        "the diff's after-side must carry both versions, not a deletion: {after}"
+    );
+    assert!(
+        after.contains("<<<<<<<"),
+        "it must be jj's marker text, so the diff reads as a conflict: {after}"
     );
 }
