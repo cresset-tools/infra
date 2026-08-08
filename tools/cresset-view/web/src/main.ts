@@ -239,7 +239,8 @@ async function initialize() {
   // are reachable and 100 are loaded — so fall back to fetching it directly rather than
   // showing nothing for a link someone shared.
   if (initialRevision == null && initialUrlState.revision != null) {
-    initialRevision = await fetchJson<Revision>(`/api/revisions/${encodeURIComponent(initialUrlState.revision)}`);
+    initialRevision = (await fetchRevisionOrNull(initialUrlState.revision)) ?? undefined;
+    if (initialRevision == null) renderMissingRevision(initialUrlState.revision);
   }
   if (initialRevision != null) {
     await selectRevision(initialRevision, revisionButtons.get(initialRevision.commit_id) ?? null, false);
@@ -751,6 +752,38 @@ function pierreThemeType(): ThemeTypes {
   return themePreference === 'auto' ? 'system' : themePreference;
 }
 
+/// Fetch a revision by id, or `null` if the repository no longer has it.
+///
+/// Links to revisions that later vanish are normal here, not an edge case. A conflict link is
+/// the clearest example: `sync/conflict/*` is deleted the moment the conflict is resolved, so
+/// every conflict link in Telegram and in this viewer's own banner goes stale by design as soon
+/// as someone does the thing it asked for. Reloading one used to throw an unhandled rejection
+/// and leave a blank page.
+async function fetchRevisionOrNull(id: string): Promise<Revision | null> {
+  try {
+    return await fetchJson<Revision>(`/api/revisions/${encodeURIComponent(id)}`);
+  } catch {
+    return null;
+  }
+}
+
+/// Say that a revision is gone, and leave the viewer usable.
+///
+/// Deliberately does NOT silently substitute a different revision: the reader followed a link to
+/// something specific, and quietly showing them something else would be worse than saying so.
+/// The revision list beside it is loaded, so the next click still works.
+function renderMissingRevision(id: string) {
+  fileHeading.textContent = 'Files';
+  changeHeading.innerHTML = '<p>No revision selected.</p>';
+  content.innerHTML = `
+    <section class="file-message">
+      <h3>That revision is no longer in this repository</h3>
+      <p><code>${escapeHtml(short(id))}</code> could not be resolved. Conflict links stop
+      resolving once the conflict is resolved, and abandoned commits stop resolving once they
+      are rewritten — both are normal. Pick a revision from the list to carry on.</p>
+    </section>`;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(await readError(response));
@@ -841,7 +874,11 @@ async function restoreUrlState() {
     ? loadedRevisions.find((candidate) => candidate.working_copy) ?? loadedRevisions[0]
     : findRevision(loadedRevisions, state.revision);
   if (revision == null && state.revision != null) {
-    revision = await fetchJson<Revision>(`/api/revisions/${encodeURIComponent(state.revision)}`);
+    revision = (await fetchRevisionOrNull(state.revision)) ?? undefined;
+    if (revision == null) {
+      renderMissingRevision(state.revision);
+      return;
+    }
   }
   if (revision == null) return;
   currentMode = state.path == null ? 'browse' : 'changes';
