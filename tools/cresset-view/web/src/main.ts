@@ -105,7 +105,7 @@ if (app == null) throw new Error('missing app element');
 
 app.innerHTML = `
   <header>
-    <div>
+    <div class="wordmark">
       <span class="eyebrow">Cresset internal</span>
       <h1>Code</h1>
     </div>
