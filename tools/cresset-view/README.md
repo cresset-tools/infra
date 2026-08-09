@@ -17,8 +17,13 @@ npm install
 npm run build
 npm test          # revision graph layout checks; also run by the Nix build
 cd ..
-cargo run -- --repository /home/jelle/cresset
+cargo run -- --repository /home/jelle/cresset --dev-identity you
 ```
+
+In production an Authentik proxy asserts who the caller is via the `x-authentik-username`
+header, and the service refuses requests without one. `--dev-identity` stands in for that
+proxy locally: requests with no identity header are served as the given user. It only works
+on a loopback listener — with anything else the server refuses to start.
 
 `npm test` is a plain script rather than a test runner: this Node build cannot start
 `node:test`, and `node:assert` would pull `@types/node` into the app's typecheck. It runs

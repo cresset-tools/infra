@@ -8,6 +8,15 @@ import {
   type ThemeTypes,
 } from '@pierre/diffs';
 import { FileTree, prepareFileTreeInput, type FileTreePreparedInput } from '@pierre/trees';
+// The bougie brand faces, self-hosted so the viewer looks the same on every machine.
+import '@fontsource/archivo/400.css';
+import '@fontsource/archivo/500.css';
+import '@fontsource/archivo/600.css';
+import '@fontsource/archivo/800.css';
+import '@fontsource/archivo/900.css';
+import '@fontsource/jetbrains-mono/400.css';
+import '@fontsource/jetbrains-mono/500.css';
+import '@fontsource/jetbrains-mono/700.css';
 import './style.css';
 import { graphLaneX, layoutRevisionGraph, type GraphRow } from './graph';
 
@@ -169,6 +178,7 @@ const loadedRevisions: Revision[] = [];
 const revisionButtons = new Map<string, HTMLButtonElement>();
 let graphLanes: Array<string | null> = [];
 let graphMaxLanes = 1;
+let graphWidth = -1;
 let revisionOffset = 0;
 let revisionHasMore = false;
 let revisionQuery = '';
@@ -220,13 +230,7 @@ async function initialize() {
     }
   });
 
-  revisionPan.addEventListener('input', () => {
-    revisionList.scrollLeft = Number(revisionPan.value);
-  });
-  revisionList.addEventListener('scroll', () => {
-    revisionPan.value = String(revisionList.scrollLeft);
-  }, { passive: true });
-  new ResizeObserver(syncRevisionPanRange).observe(revisionList);
+  revisionPan.addEventListener('input', applyGraphPan);
 
   const first = await loadRevisionPage(true);
   if (first == null) return;
@@ -244,6 +248,12 @@ async function initialize() {
     if (initialRevision == null) renderMissingRevision(initialUrlState.revision);
   }
   if (initialRevision != null) {
+    // A path in the URL pins changes mode (the link points at a diff); otherwise the revision
+    // decides, same as a click would.
+    if (initialUrlState.path == null) {
+      currentMode = defaultModeFor(initialRevision);
+      syncModeButtons();
+    }
     await selectRevision(initialRevision, revisionButtons.get(initialRevision.commit_id) ?? null, false);
   }
   window.addEventListener('popstate', () => void restoreUrlState());
@@ -269,6 +279,11 @@ async function loadRevisionPage(reset: boolean): Promise<RevisionsResponse | nul
     graphMaxLanes = 1;
     revisionOffset = 0;
     revisionList.replaceChildren();
+    // Some engines keep the old scroll offset past the end of the now-shorter list, which
+    // shows a blank pane until the reader scrolls back up.
+    revisionList.scrollTop = 0;
+    revisionPan.value = '0';
+    applyGraphPan();
     revisionMoreButton = null;
     revisionStatus = null;
     revisionObserver?.disconnect();
@@ -305,6 +320,24 @@ async function loadRevisionPage(reset: boolean): Promise<RevisionsResponse | nul
   return response;
 }
 
+/// Record the full drawn width of the topology, keeping every rendered row in agreement.
+///
+/// The graph COLUMN is a fixed width (`--graph-col`, CSS): a later page introducing a new lane
+/// used to widen the shared column, which visibly re-laid-out every row already on screen the
+/// moment a page arrived. Instead the drawing keeps its full width (`--graph-full-width`) inside
+/// the fixed window and the pan slider translates it. Each row's SVG bakes this width into its
+/// `viewBox`, and `preserveAspectRatio="none"` would stretch a stale one sideways off the nodes,
+/// so when the width grows the already-rendered viewBoxes are rewritten to match.
+function setGraphWidth(width: number) {
+  if (width === graphWidth) return;
+  graphWidth = width;
+  revisionList.style.setProperty('--graph-full-width', `${width}px`);
+  for (const svg of revisionList.querySelectorAll('.revision-graph svg')) {
+    svg.setAttribute('viewBox', `0 0 ${width} 100`);
+  }
+  syncRevisionPanRange();
+}
+
 function appendRevisionRows(revisions: Revision[]) {
   // In search mode the visible rows are not contiguous history, so a topology graph drawn
   // through them would connect commits that are not adjacent — a picture that is simply false.
@@ -316,9 +349,7 @@ function appendRevisionRows(revisions: Revision[]) {
   }
   const laneGap = 14;
   const width = searching ? 0 : Math.ceil(24 + (graphMaxLanes - 1) * laneGap);
-  // Set once on the container rather than per row: a later page can widen the graph, and every
-  // row has to agree on the column width or the sticky text column stops lining up.
-  revisionList.style.setProperty('--graph-width', `${width}px`);
+  setGraphWidth(width);
   // Rows have no graph child while searching, so they need a single-column grid. Carried on the
   // container so it applies to pages appended later too.
   revisionList.classList.toggle('searching', searching);
@@ -383,6 +414,12 @@ function setMoreState(state: 'loading' | 'more' | 'done' | 'error') {
     }
     revisionMoreButton.disabled = false;
     revisionMoreButton.textContent = 'Load more';
+    // Re-observe after every page: the button is moved down rather than re-created, so if it
+    // is still inside the root margin after a page appends, its intersection state never
+    // changed and the observer would stay silent — the list stalled until the next scroll.
+    // Observing anew always reports the current state.
+    revisionObserver?.unobserve(revisionMoreButton);
+    revisionObserver?.observe(revisionMoreButton);
     return;
   }
   if (state === 'loading') {
@@ -411,6 +448,16 @@ function setMoreState(state: 'loading' | 'more' | 'done' | 'error') {
   revisionList.append(revisionStatus);
 }
 
+/// The mode a revision opens in before anyone touches the switch.
+///
+/// The working copy is where the tree as it stands is the interesting object — you browse it.
+/// Any other revision is usually visited to see what it changed, so it opens on its diff. The
+/// header switch still overrides either, for the revision currently selected; picking another
+/// revision returns to its default.
+function defaultModeFor(revision: Revision): ViewMode {
+  return revision.working_copy ? 'browse' : 'changes';
+}
+
 async function setMode(mode: ViewMode) {
   if (mode === currentMode) return;
   currentMode = mode;
@@ -429,11 +476,19 @@ function syncModeButtons() {
   }
 }
 
+/// The graph column is a fixed-width window onto the full topology; the slider translates the
+/// drawing behind it. The range is simply how much of the drawing does not fit in the window.
 function syncRevisionPanRange() {
-  const maximum = Math.max(0, revisionList.scrollWidth - revisionList.clientWidth);
+  const sample = revisionList.querySelector('.revision-graph');
+  const maximum = sample == null ? 0 : Math.max(0, graphWidth - sample.clientWidth);
   revisionPan.max = String(maximum);
   revisionPan.disabled = maximum === 0;
-  revisionPan.value = String(Math.min(maximum, revisionList.scrollLeft));
+  if (Number(revisionPan.value) > maximum) revisionPan.value = String(maximum);
+  applyGraphPan();
+}
+
+function applyGraphPan() {
+  revisionList.style.setProperty('--graph-pan', `${-Number(revisionPan.value)}px`);
 }
 
 async function selectRevision(revision: Revision, button: HTMLButtonElement | null, updateHistory: boolean) {
@@ -441,7 +496,11 @@ async function selectRevision(revision: Revision, button: HTMLButtonElement | nu
   currentRevisionButton?.classList.remove('selected');
   currentRevisionButton = button;
   button?.classList.add('selected');
-  if (updateHistory) setViewUrl(revision, null, true);
+  if (updateHistory) {
+    currentMode = defaultModeFor(revision);
+    syncModeButtons();
+    setViewUrl(revision, null, true);
+  }
   const requestedPath = currentMode === 'changes' ? readUrlState().path : null;
   await loadRevision(revision, requestedPath);
 }
@@ -795,9 +854,11 @@ function renderRevisionGraph(row: GraphRow, revision: Revision, width: number, l
 
   return `
     <span class="revision-graph" aria-hidden="true">
-      <svg viewBox="0 0 ${width} 100" preserveAspectRatio="none">${paths}</svg>
-      <span class="${nodeClasses}" style="left: ${graphLaneX(row.lane, laneGap)}px"></span>
-      ${revision.is_head ? `<span class="graph-head-label lane-${row.lane % 8}" style="left: ${graphLaneX(row.lane, laneGap) + 10}px">head</span>` : ''}
+      <span class="graph-pan-layer">
+        <svg viewBox="0 0 ${width} 100" preserveAspectRatio="none">${paths}</svg>
+        <span class="${nodeClasses}" style="left: ${graphLaneX(row.lane, laneGap)}px"></span>
+        ${revision.is_head ? `<span class="graph-head-label lane-${row.lane % 8}" style="left: ${graphLaneX(row.lane, laneGap) + 10}px">head</span>` : ''}
+      </span>
     </span>
   `;
 }
@@ -935,7 +996,7 @@ async function restoreUrlState() {
     }
   }
   if (revision == null) return;
-  currentMode = state.path == null ? 'browse' : 'changes';
+  currentMode = state.path == null ? defaultModeFor(revision) : 'changes';
   syncModeButtons();
   await selectRevision(revision, revisionButtons.get(revision.commit_id) ?? null, false);
 }
@@ -952,10 +1013,6 @@ function short(id: string): string {
 
 function firstLine(value: string): string {
   return value.split('\n', 1)[0] ?? '';
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value));
 }
 
 function escapeHtml(value: string): string {

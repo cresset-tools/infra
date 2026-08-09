@@ -60,6 +60,16 @@ struct Args {
 
     #[arg(long)]
     check: bool,
+
+    /// Answer requests that carry no identity header as this user. Local development only.
+    ///
+    /// Deliberately has no environment variable: an env var lingers in a unit file or a shell
+    /// profile long after anyone remembers setting it, and this one would linger as "the
+    /// authentication is off". A flag has to be typed into the command line that starts the
+    /// server, every time, by someone looking at it. For the same reason it refuses to start
+    /// on a non-loopback listener.
+    #[arg(long)]
+    dev_identity: Option<String>,
 }
 
 #[derive(Clone)]
@@ -272,7 +282,11 @@ struct DiffQuery {
 /// worthless. Bind it to loopback.
 ///
 /// `/health` is exempt so a local probe does not need an identity.
-async fn require_identity(request: Request, next: Next) -> Response {
+///
+/// `dev_identity` (`--dev-identity`) stands in for the proxy when developing locally: a request
+/// with no identity header is treated as that user instead of being refused. A header that IS
+/// present still wins, so a dev instance behind a real proxy behaves normally.
+async fn require_identity(dev_identity: Option<Arc<str>>, request: Request, next: Next) -> Response {
     if request.uri().path() == "/health" {
         return next.run(request).await;
     }
@@ -282,7 +296,7 @@ async fn require_identity(request: Request, next: Next) -> Response {
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .unwrap_or_default();
-    if identity.is_empty() {
+    if identity.is_empty() && dev_identity.is_none() {
         return (
             StatusCode::FORBIDDEN,
             "authentication is required to view this repository",
@@ -303,6 +317,24 @@ async fn main() -> Result<()> {
         let loaded = load_repository(&args.repository).await?;
         println!("{}", loaded.repo.op_id().hex());
         return Ok(());
+    }
+    let dev_identity: Option<Arc<str>> = args.dev_identity.as_deref().map(Arc::from);
+    if let Some(identity) = &dev_identity {
+        // The identity check is sound only while the header is unforgeable, and --dev-identity
+        // removes the need to forge it at all — acceptable solely where "whoever can reach the
+        // port" already means "whoever is at this keyboard".
+        let loopback = args
+            .listen
+            .parse::<std::net::SocketAddr>()
+            .is_ok_and(|address| address.ip().is_loopback());
+        if !loopback {
+            anyhow::bail!(
+                "--dev-identity disables authentication, so it refuses to serve on {}; \
+                 bind a loopback address like 127.0.0.1:8080",
+                args.listen
+            );
+        }
+        tracing::warn!(identity = %identity, "authentication disabled: requests without an identity header are served as this user");
     }
     let state = AppState {
         repository: Arc::new(args.repository),
@@ -326,7 +358,9 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state)
         // Outermost, so it runs before anything else touches the request.
-        .layer(middleware::from_fn(require_identity));
+        .layer(middleware::from_fn(move |request, next| {
+            require_identity(dev_identity.clone(), request, next)
+        }));
 
     let listener = tokio::net::TcpListener::bind(&args.listen)
         .await

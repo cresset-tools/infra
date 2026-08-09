@@ -9,6 +9,8 @@
     "test": "esbuild src/graph.test.ts --bundle --platform=node --format=esm --outfile=.test-graph.mjs --log-level=warning && node .test-graph.mjs"
   },
   "dependencies": {
+    "@fontsource/archivo": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "@pierre/diffs": "1.2.12",
     "@pierre/trees": "1.0.0-beta.5"
   },
