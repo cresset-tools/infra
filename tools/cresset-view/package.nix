@@ -13,7 +13,7 @@ let
         ./web/src
       ];
     };
-    npmDepsHash = "sha256-ST8Bo1mKZpa8eP4j9MEhiHIiLd4snyrCk0F8mtm76t0=";
+    npmDepsHash = "sha256-z8J2jJo/0OpMN3mCdy1Ttb31op0T/wPYhlEfk6zCkn4=";
     # Run `npm test` in the sandbox. The revision graph layout carries lane state across
     # pages, and a mistake there does not throw -- it draws a history that is subtly not the
     # one in the repository. A check that only runs on someone's laptop does not protect that.
