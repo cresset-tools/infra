@@ -17,7 +17,7 @@
 #   - docs/, deliberately unmapped, which `.sync/projects.toml` describes as holding
 #     unannounced products, pricing and commercial strategy.
 #   - /srv/sync/state.db: checkpoints and the resolution history. Losing it means
-#     re-bootstrapping all 31 projects and losing every recorded conflict resolution.
+#     re-bootstrapping all 32 projects and losing every recorded conflict resolution.
 #
 # Plus /etc/ssh/ssh_host_ed25519_key, which `sops.age.sshKeyPaths` makes the master key for
 # every secret on this host.

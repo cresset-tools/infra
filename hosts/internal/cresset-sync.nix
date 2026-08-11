@@ -225,17 +225,20 @@ in
   # timer (matches the design's "periodic reconciliation loop; webhooks are only
   # latency hints").
   #
-  # ROLLOUT STATE: `--apply` is on, every project is still off, and the resolver runs
-  # in suggest-only mode. Those are three independent switches on purpose.
+  # ROLLOUT STATE: `--apply` is on, every mapped project is now enabled, and the
+  # resolver still runs in suggest-only mode. Those are three independent switches on
+  # purpose, and the third is deliberately still in its safe position.
   #
   # `--apply` opts into the state-mutating import+export path, but it synchronises
   # NOTHING on its own: `enable` is durable per-project state that defaults to off, so
   # the pass covers exactly the projects turned on with `cresset-sync enable <project>`
-  # and says so when that set is empty. That is what makes it safe to land this switch
-  # before any project is enabled, rather than flipping both at once and starting on all
-  # thirty-one repositories together. `cresset-sync disable <project>` is the emergency
-  # per-project pause. (`--apply --export-project <id>` still restricts a pass to one
-  # project regardless of its switch, for targeted operator runs.)
+  # and says so when that set is empty. That is what made it safe to land this switch
+  # before any project was enabled, rather than flipping both at once and starting on
+  # all the repositories together — enablement then went out in small groups, per the
+  # rollout in docs/SYNC_WORKER.md phase 17, until it covered all of them.
+  # `cresset-sync disable <project>` is the emergency per-project pause.
+  # (`--apply --export-project <id>` still restricts a pass to one project regardless
+  # of its switch, for targeted operator runs.)
   #
   # `--agent-command` turns on automated conflict resolution. It is only meaningful
   # alongside `--apply`: the resolution policy is constructed solely on the `--apply`
