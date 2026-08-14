@@ -48,6 +48,16 @@ let
   #
   # So: a hook that constrains `refs/heads/main` and leaves every other ref alone. Rewrite
   # feature bookmarks as much as you like; land on `main` once, forward.
+  # Record every patch set pushed for review, so an amend cannot make the previous one
+  # unreachable. See hooks/post-receive for the reasoning; kept as a plain script rather
+  # than inlined here so a test can exercise the byte-for-byte file the host installs
+  # instead of a copy that drifts from it.
+  recordPatchSets = pkgs.writeShellApplication {
+    name = "cresset-canonical-post-receive";
+    runtimeInputs = [ pkgs.git ];
+    text = builtins.readFile ./hooks/post-receive;
+  };
+
   protectMain = pkgs.writeShellScript "cresset-canonical-update-hook" ''
     set -eu
     ref="$1"; old="$2"; new="$3"
@@ -155,6 +165,7 @@ in
       # went missing would disable this protection without anyone noticing. A copy cannot dangle,
       # and re-installing it on every activation keeps it current.
       install -o git -g git -m 0755 ${protectMain} ${bareRepo}/hooks/update
+      install -o git -g git -m 0755 ${recordPatchSets}/bin/cresset-canonical-post-receive ${bareRepo}/hooks/post-receive
 
       # Belt-and-braces: keep the whole tree git-owned across redeploys (a push
       # or the local worker advance may have created objects as `git`).

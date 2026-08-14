@@ -173,6 +173,85 @@
           };
       };
 
+      # Tests for the canonical repository's git hooks.
+      #
+      # Run by `nix flake check`, which check.yml already runs on every PR. The hook is read
+      # from the SAME file hosts/internal/git-canonical.nix installs, so this cannot pass
+      # against a copy that has drifted from what the host runs.
+      checks.${system}.canonical-review-hooks =
+        let
+          hook = pkgs.writeShellApplication {
+            name = "post-receive";
+            runtimeInputs = [ pkgs.git ];
+            text = builtins.readFile ./hosts/internal/hooks/post-receive;
+          };
+        in
+        pkgs.runCommand "canonical-review-hooks" {
+          nativeBuildInputs = [ pkgs.git pkgs.jujutsu ];
+        } ''
+          set -eu
+          export HOME=$TMPDIR JJ_CONFIG=/dev/null
+          cd "$TMPDIR"
+
+          git init -q --bare -b main canonical.git
+          install -m 0755 ${hook}/bin/post-receive canonical.git/hooks/post-receive
+          bare="$TMPDIR/canonical.git"
+          g() { git --git-dir="$bare" "$@"; }
+
+          jj git init --colocate work >/dev/null 2>&1
+          cd work
+          jj config set --repo user.name Test >/dev/null
+          jj config set --repo user.email test@example.com >/dev/null
+          echo base > f.txt
+          jj commit -m base >/dev/null
+          jj bookmark set main -r @- >/dev/null
+          jj git remote add canonical "$bare" >/dev/null
+          jj git push -b main >/dev/null 2>&1
+
+          # 1. A change pushed for review is pinned as patch set 1.
+          jj new main -m "a change" >/dev/null
+          echo one > g.txt
+          jj bookmark set review/thing -r @ >/dev/null
+          jj git push -b review/thing >/dev/null 2>&1
+          cid=$(g for-each-ref --format='%(refname)' 'refs/changes/**' | head -1 | cut -d/ -f3)
+          test -n "$cid" || { echo "FAIL: no patch set was recorded"; exit 1; }
+          test "$(g show "refs/changes/$cid/1:g.txt")" = one || { echo "FAIL: patch set 1 content"; exit 1; }
+
+          # 2. Amending records a SECOND patch set under the same change.
+          echo two >> g.txt
+          jj bookmark set review/thing -r @ >/dev/null
+          jj git push -b review/thing >/dev/null 2>&1
+          test "$(g show "refs/changes/$cid/2:g.txt" | tr '\n' ' ')" = "one two " \
+            || { echo "FAIL: patch set 2 content"; exit 1; }
+
+          # 3. The superseded patch set is on no branch, yet survives gc. This is the whole
+          #    reason the hook exists: jj discards the old commit on amend.
+          test "$(g branch --contains "$(g rev-parse "refs/changes/$cid/1")" | wc -l)" = 0 \
+            || { echo "FAIL: patch set 1 should be unreachable from any branch"; exit 1; }
+          g gc --prune=now --quiet
+          test "$(g cat-file -t "refs/changes/$cid/1")" = commit \
+            || { echo "FAIL: patch set 1 did not survive gc"; exit 1; }
+
+          # 4. Re-pushing an unchanged bookmark must not mint a duplicate patch set.
+          jj git push -b review/thing >/dev/null 2>&1 || true
+          test "$(g for-each-ref 'refs/changes/**' | wc -l)" = 2 \
+            || { echo "FAIL: re-push created a duplicate patch set"; exit 1; }
+
+          # 5. A commit with no change-id (plain git) is noted, not fatal.
+          cd "$TMPDIR"
+          git clone -q "$bare" plain
+          cd plain
+          git checkout -q -b review/plain main
+          echo x > plain.txt
+          git add -A
+          git -c user.name=P -c user.email=p@e.com commit -qm "plain"
+          git push -q origin review/plain 2>err.txt || { echo "FAIL: push rejected"; exit 1; }
+          grep -q "no change-id" err.txt || { echo "FAIL: expected a note about the missing change-id"; exit 1; }
+
+          echo "all canonical hook checks passed"
+          touch $out
+        '';
+
       # Nix-built OCI images for the demo host (built here, loaded via
       # oci-containers imageFile). sconce is not among them — it comes from
       # ghcr.io/cresset-tools/sconce, pulled by tag (see demo-images.nix).

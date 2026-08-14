@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -eu
+
+# Pin every patch set pushed for review, so it cannot become unreachable.
+#
+# jj rewrites a change in place: amending discards the previous commit, which then has no ref
+# pointing at it and is gc-able. Review needs the opposite — comparing patch set 2 against
+# patch set 1 is the core of reading a re-submitted change, and porting comments forward needs
+# the version they were written against to still exist.
+#
+# Gerrit solves this with refs/changes/NN/CCCC/PP. The same trick works here and needs no
+# database: `refs/changes/<change-id>/<n>`. Deliberately git-only — a hook that wrote to
+# cresset-view's SQLite would need cross-user access to a WAL database, which is exactly what
+# leaves /api/sync reporting no projects today.
+while read -r _old new ref; do
+  case "$ref" in
+    refs/heads/review/*) ;;
+    *) continue ;;
+  esac
+
+  # Commits carried by this bookmark that have not landed. `--not refs/heads/main` is what
+  # makes a stack of five commits record five changes rather than the whole history.
+  if git rev-parse --verify --quiet refs/heads/main >/dev/null; then
+    commits=$(git rev-list "$new" --not refs/heads/main)
+  else
+    commits=$(git rev-list "$new")
+  fi
+
+  for sha in $commits; do
+    # The jj change id is an ordinary commit header, so plain git can read it and this hook
+    # needs no jj on the server.
+    cid=$(git cat-file commit "$sha" | sed -n 's/^change-id //p' | head -1)
+    # A commit pushed by plain git has no change id. Not an error — it simply cannot be
+    # tracked as a change, and saying so is better than inventing an identity for it.
+    if [ -z "$cid" ]; then
+      echo "note: $(git rev-parse --short "$sha") has no change-id; not tracked as a change" >&2
+      continue
+    fi
+
+    # Idempotent: re-pushing an unchanged bookmark must not mint duplicate patch sets.
+    if git for-each-ref --format='%(objectname)' "refs/changes/$cid/**" | grep -qx "$sha"; then
+      continue
+    fi
+
+    n=$(( $(git for-each-ref --format='%(refname)' "refs/changes/$cid/**" | wc -l) + 1 ))
+    git update-ref "refs/changes/$cid/$n" "$sha"
+    echo "recorded patch set $n of change $cid ($(git rev-parse --short "$sha"))"
+  done
+done
