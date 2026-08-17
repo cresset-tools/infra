@@ -248,6 +248,28 @@
           git push -q origin review/plain 2>err.txt || { echo "FAIL: push rejected"; exit 1; }
           grep -q "no change-id" err.txt || { echo "FAIL: expected a note about the missing change-id"; exit 1; }
 
+          # 6. Patch sets must stay OUT of jj's namespace.
+          #
+          # This is the property the whole review design rests on, and it is easy to break by
+          # "tidying" patch sets into refs/heads so jj can see them. If they arrive as
+          # bookmarks, every version of a change becomes a visible commit sharing one change
+          # id and jj refuses to resolve it -- `Change ID is divergent` -- in the very
+          # repository that needs to resolve change ids. Measured, not assumed: doing it that
+          # way produced 2 divergent changes from 2 changes under review.
+          cd "$TMPDIR"
+          jj git clone --colocate "$bare" viewer >/dev/null 2>&1
+          cd viewer
+          git fetch --quiet origin "+refs/changes/*:refs/changes/*"
+          test "$(git for-each-ref 'refs/changes/**' | wc -l)" = 2 \
+            || { echo "FAIL: patch sets did not reach the viewer"; exit 1; }
+          test "$(jj log -r 'divergent()' --no-graph -T '"x"' 2>/dev/null | wc -c)" = 0 \
+            || { echo "FAIL: fetching patch sets made a change divergent"; exit 1; }
+          jj log -r "$cid" --no-graph -T '"ok"' >/dev/null 2>&1 \
+            || { echo "FAIL: the change id is no longer addressable"; exit 1; }
+          # And both versions are still readable, which is the point of keeping them.
+          test "$(git show "refs/changes/$cid/1:g.txt")" = one \
+            || { echo "FAIL: patch set 1 unreadable from the viewer"; exit 1; }
+
           echo "all canonical hook checks passed"
           touch $out
         '';

@@ -291,6 +291,20 @@ in
           # network, and no key for the `git` account that exists only to serve SSH.
           "$jj" -R "$repo" git remote set-url canonical /srv/git/cresset.git 2>/dev/null || true
           "$jj" -R "$repo" git fetch --remote canonical
+          # Patch sets, which `jj git fetch` does not bring: it fetches refs/heads/* into
+          # remote bookmarks, and review patch sets live at refs/changes/<change-id>/<n>.
+          #
+          # They are OUTSIDE refs/heads deliberately. Importing them as bookmarks makes every
+          # version of a change a visible commit sharing one change id, and jj then refuses to
+          # resolve it -- `Change ID is divergent`. That would break the identity the whole
+          # review design rests on, in the one repository that most needs to resolve it. Kept
+          # out of jj's namespace, the change id stays addressable and the old patch sets are
+          # still there to read and diff.
+          #
+          # No --prune: patch sets are append-only history, and a superseded one is exactly
+          # what a reviewer comes back for.
+          ${pkgs.git}/bin/git -C "$repo" fetch --quiet canonical \
+            "+refs/changes/*:refs/changes/*"
         '';
         NoNewPrivileges = true;
         PrivateTmp = true;
