@@ -787,7 +787,17 @@ async function toggleApproval(detail: ChangeDetail, showing: string, button: HTM
   const mine = reviewApprovals.some(
     (approval) => approval.commit_id === showing && approval.approved_by === reviewIdentity,
   );
+  // Say what is happening. A disabled button that only changes back when the answer arrives
+  // is indistinguishable from a dead one, and the first person to use this pressed it three
+  // times over thirty seconds because nothing said it had been heard. Every server-side
+  // measurement of this request is under 110ms, so the delay was somewhere between browser
+  // and box — which makes it exactly the case the UI has to survive rather than assume away.
+  const label = button.textContent ?? '';
   button.disabled = true;
+  button.textContent = mine ? 'Withdrawing…' : 'Approving…';
+  const slow = window.setTimeout(() => {
+    button.textContent = mine ? 'Still withdrawing…' : 'Still approving…';
+  }, 3000);
   try {
     const response = await postJson<ApprovalsResponse>(
       `/api/changes/${encodeURIComponent(detail.change_id)}/approvals`,
@@ -798,10 +808,13 @@ async function toggleApproval(detail: ChangeDetail, showing: string, button: HTM
     renderChangeHeading(detail, showing);
   } catch (error) {
     button.disabled = false;
+    button.textContent = label;
     const message = document.createElement('p');
     message.className = 'thread-error';
     message.textContent = error instanceof Error ? error.message : String(error);
     button.closest('.approval')?.append(message);
+  } finally {
+    window.clearTimeout(slow);
   }
 }
 

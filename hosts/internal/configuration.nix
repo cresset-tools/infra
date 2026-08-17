@@ -381,6 +381,29 @@ in
     recommendedGzipSettings = true;
     recommendedProxySettings = true;
 
+    # Log how long each request took, split between us and the network.
+    #
+    # Added after an approval in cresset-view reportedly took 30 seconds while every
+    # server-side component measured under 110ms end to end — the handler at 2ms, the
+    # Authentik forward-auth subrequest at 110ms, every API endpoint under 41ms. With only
+    # the default `combined` format there was no way to tell whether the time was ours, and
+    # a slow request behind forward-auth is exactly the thing that is hard to attribute
+    # afterwards.
+    #
+    # `$request_time` is measured from the first byte read from the client to the last byte
+    # written to it; `$upstream_response_time` is what the proxied service took. The two
+    # together separate a slow application from a slow client connection: if request_time is
+    # 30s and upstream_response_time is 0.01s, the time was spent on the wire, not here.
+    # `$upstream_response_time` carries one entry per upstream, so an auth_request subrequest
+    # shows up as a second figure — which is the point, since that is a second round trip
+    # every request pays.
+    commonHttpConfig = ''
+      log_format timed '$remote_addr - $remote_user [$time_local] "$request" '
+                       '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
+                       'request_time=$request_time upstream_time=$upstream_response_time';
+      access_log /var/log/nginx/access.log timed;
+    '';
+
     # Unknown Host -> drop the connection. This IP is recycled: nsk-test.werktoej.dk,
     # a previous tenant's name, still resolves here, so third-party traffic arrives
     # under hostnames we do not serve. Without a default server those requests fall
