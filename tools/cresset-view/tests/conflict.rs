@@ -24,6 +24,7 @@ fn jj(dir: &Path, args: &[&str]) -> String {
         .env("JJ_CONFIG", "/dev/null")
         .env("JJ_USER", "Test")
         .env("JJ_EMAIL", "test@example.com")
+        .env("HOME", dir)
         .output()
         .unwrap_or_else(|e| panic!("running jj {args:?}: {e}"));
     assert!(
@@ -349,4 +350,168 @@ fn a_conflicted_path_shows_its_markers_in_the_diff() {
         after.contains("<<<<<<<"),
         "it must be jj's marker text, so the diff reads as a conflict: {after}"
     );
+}
+
+/// A repository shaped like production: a bare remote the viewer fetches from, so review
+/// bookmarks arrive as REMOTE bookmarks and patch sets as `refs/changes/*`.
+///
+/// The shape matters. Reading only `local_bookmarks()` returns an empty queue against a real
+/// viewer repository, because that repository only ever fetches and so never has a local
+/// review bookmark. A fixture that pushed nowhere would have passed anyway.
+fn review_repo(dir: &Path) -> (String, String) {
+    let bare = dir.join("canonical.git");
+    let work = dir.join("work");
+    let out = Command::new("git")
+        .args(["init", "-q", "--bare", "-b", "main"])
+        .arg(&bare)
+        .output()
+        .expect("init bare");
+    assert!(out.status.success());
+
+    std::fs::create_dir_all(&work).expect("mkdir work");
+    jj(&work, &["git", "init", "--colocate", "."]);
+    std::fs::write(work.join("f.txt"), "base\n").expect("write");
+    jj(&work, &["commit", "-m", "base"]);
+    jj(&work, &["bookmark", "set", "main", "-r", "@-"]);
+    jj(
+        &work,
+        &["git", "remote", "add", "canonical", bare.to_str().unwrap()],
+    );
+    jj(&work, &["git", "push", "-b", "main"]);
+
+    jj(&work, &["new", "main", "-m", "a change under review"]);
+    std::fs::write(work.join("g.txt"), "one\n").expect("write");
+    jj(&work, &["bookmark", "set", "review/thing", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "review/thing"]);
+    let change = jj(&work, &["log", "-r", "@", "--no-graph", "-T", "change_id"]);
+    let commit = jj(&work, &["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+
+    // Pin the patch set the way the canonical repo's post-receive hook does. That hook is
+    // exercised by `nix flake check`; here we only care that the viewer READS what it writes.
+    let out = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["update-ref", &format!("refs/changes/{change}/1"), &commit])
+        .output()
+        .expect("pin patch set");
+    assert!(out.status.success());
+
+    // The viewer's repository: a fetching clone, exactly as cresset-view-refresh maintains.
+    let viewer = dir.join("viewer");
+    let out = Command::new("jj")
+        .args(["git", "clone", "--colocate"])
+        .arg(&bare)
+        .arg(&viewer)
+        .env("JJ_CONFIG", "/dev/null")
+        .env("JJ_USER", "Test")
+        .env("JJ_EMAIL", "test@example.com")
+        // jj writes a per-repo config under HOME. The Nix sandbox provides none, and without
+        // it the clone fails while printing output that reads like success.
+        .env("HOME", dir)
+        .output()
+        .expect("clone viewer");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&viewer)
+        .args(["fetch", "-q", "origin", "+refs/changes/*:refs/changes/*"])
+        .output()
+        .expect("fetch patch sets");
+    assert!(out.status.success());
+
+    (change, commit)
+}
+
+#[test]
+fn the_queue_lists_changes_that_have_not_landed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, commit) = review_repo(dir.path());
+    let server = Server::start(&dir.path().join("viewer"));
+
+    let body = server
+        .get("/api/changes")
+        .expect("the queue must be served");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    let changes = value["changes"].as_array().expect("changes array");
+
+    assert_eq!(
+        changes.len(),
+        1,
+        "one change is open; `main` must not be listed: {value}"
+    );
+    assert_eq!(changes[0]["change_id"], change);
+    assert_eq!(changes[0]["commit_id"], commit);
+    assert_eq!(changes[0]["patch_sets"], 1);
+    assert_eq!(
+        changes[0]["bookmark"], "review/thing",
+        "the review bookmark is REMOTE in a fetching repo, which is all the viewer ever has"
+    );
+}
+
+#[test]
+fn a_change_serves_every_patch_set_with_the_current_one_marked() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, first) = review_repo(dir.path());
+
+    // A second patch set, pinned as the hook would on re-push.
+    let bare = dir.path().join("canonical.git");
+    let work = dir.path().join("work");
+    std::fs::write(work.join("g.txt"), "one\ntwo\n").expect("write");
+    jj(&work, &["bookmark", "set", "review/thing", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "review/thing"]);
+    let second = jj(&work, &["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+    assert_ne!(first, second, "the amend must produce a new commit id");
+    let out = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["update-ref", &format!("refs/changes/{change}/2"), &second])
+        .output()
+        .expect("pin patch set 2");
+    assert!(out.status.success());
+
+    let viewer = dir.path().join("viewer");
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&viewer)
+        .args(["fetch", "-q", "origin", "+refs/changes/*:refs/changes/*"])
+        .output()
+        .expect("fetch patch sets");
+    assert!(out.status.success());
+    let out = Command::new("jj")
+        .args(["git", "fetch"])
+        .current_dir(&viewer)
+        .env("JJ_CONFIG", "/dev/null")
+        .env("HOME", dir.path())
+        .output()
+        .expect("jj fetch");
+    assert!(out.status.success());
+
+    let server = Server::start(&viewer);
+    let body = server
+        .get(&format!("/api/changes/{change}"))
+        .expect("the change must be served");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    let sets = value["patch_sets"].as_array().expect("patch_sets");
+
+    assert_eq!(
+        sets.len(),
+        2,
+        "both versions must be offered, not just the newest: {value}"
+    );
+    assert_eq!(sets[0]["number"], 1);
+    assert_eq!(sets[0]["commit_id"], first);
+    assert_eq!(sets[0]["current"], false, "patch set 1 has been superseded");
+    assert_eq!(sets[1]["number"], 2);
+    assert_eq!(
+        sets[1]["current"], true,
+        "the reviewer must know which one would land"
+    );
+
+    // The superseded commit is on no branch, and is still readable. That is the entire reason
+    // patch sets are pinned.
+    assert_eq!(value["change_id"], change);
 }

@@ -15,7 +15,7 @@ use axum::{Json, Router};
 use clap::Parser;
 use futures::channel::mpsc;
 use futures::{AsyncReadExt, SinkExt, StreamExt, TryStreamExt};
-use jj_lib::backend::TreeValue;
+use jj_lib::backend::{CommitId, TreeValue};
 use jj_lib::commit::Commit;
 use jj_lib::config::StackedConfig;
 use jj_lib::conflict_labels::ConflictLabels;
@@ -138,6 +138,49 @@ struct Revision {
     working_copy: bool,
     is_head: bool,
     bookmarks: Vec<String>,
+}
+
+/// One change awaiting review: a commit carried by a `review/*` bookmark that has not landed.
+#[derive(Serialize)]
+struct ChangeSummary {
+    /// Stable across amends — this is what a review thread will hang off.
+    change_id: String,
+    /// The commit realising the change right now, i.e. its latest patch set.
+    commit_id: String,
+    description: String,
+    author_name: String,
+    authored_at: String,
+    /// The review bookmark carrying it. A stack puts several changes on one bookmark.
+    bookmark: String,
+    /// How many versions have been pushed. 1 means it has not been revised yet.
+    patch_sets: usize,
+    has_conflict: bool,
+}
+
+#[derive(Serialize)]
+struct ChangesResponse {
+    operation_id: String,
+    changes: Vec<ChangeSummary>,
+}
+
+#[derive(Serialize)]
+struct PatchSet {
+    number: u32,
+    commit_id: String,
+    /// False once a newer patch set exists. The reviewer needs to know whether they are
+    /// reading the version that would land.
+    current: bool,
+}
+
+#[derive(Serialize)]
+struct ChangeDetail {
+    operation_id: String,
+    change_id: String,
+    /// The change as it stands, in the same shape the revision endpoints return.
+    current: Revision,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bookmark: Option<String>,
+    patch_sets: Vec<PatchSet>,
 }
 
 #[derive(Serialize)]
@@ -286,7 +329,11 @@ struct DiffQuery {
 /// `dev_identity` (`--dev-identity`) stands in for the proxy when developing locally: a request
 /// with no identity header is treated as that user instead of being refused. A header that IS
 /// present still wins, so a dev instance behind a real proxy behaves normally.
-async fn require_identity(dev_identity: Option<Arc<str>>, request: Request, next: Next) -> Response {
+async fn require_identity(
+    dev_identity: Option<Arc<str>>,
+    request: Request,
+    next: Next,
+) -> Response {
     if request.uri().path() == "/health" {
         return next.run(request).await;
     }
@@ -349,6 +396,8 @@ async fn main() -> Result<()> {
         .route("/api/revisions", get(revisions))
         .route("/api/revisions/{id}", get(revision))
         .route("/api/bookmarks", get(bookmarks))
+        .route("/api/changes", get(changes))
+        .route("/api/changes/{id}", get(change))
         .route("/api/sync", get(sync_status))
         .route("/api/revisions/{id}/tree", get(tree))
         .route("/api/revisions/{id}/file", get(file))
@@ -650,6 +699,152 @@ fn commit_matches(commit: &Commit, needle: &str) -> bool {
         || commit.author().email.to_lowercase().contains(needle)
         || commit.change_id().reverse_hex().starts_with(needle)
         || commit.id().hex().starts_with(needle)
+}
+
+/// The review queue: changes on a `review/*` bookmark that have not landed on `main`.
+///
+/// "Not landed" is the whole definition of open, and it is computed rather than tracked —
+/// there is no status column to fall out of step with the repository. Landing a change makes
+/// it disappear from here because it becomes an ancestor of `main`, with nothing to update.
+async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>, AppError> {
+    let path = state.repository.as_ref().clone();
+    let response = run_jj(move || async move {
+        let loaded = load_repository(&path).await?;
+        let repo = loaded.repo.as_ref();
+        let view = repo.view();
+
+        // Review bookmarks and the commits they carry.
+        let mut heads = Vec::new();
+        let mut bookmark_of: std::collections::HashMap<CommitId, String> =
+            std::collections::HashMap::new();
+        // Local AND remote bookmarks. The viewer's repository only ever fetches, so a review
+        // bookmark exists there as `review/x@origin` and never locally — reading only local
+        // bookmarks returned an empty queue against a real repository.
+        for (name, targets) in view.bookmarks() {
+            let name = name.as_str().to_owned();
+            if !name.starts_with("review/") {
+                continue;
+            }
+            let ids = targets.local_target.added_ids().chain(
+                targets
+                    .remote_refs
+                    .iter()
+                    .flat_map(|(_, r)| r.target.added_ids()),
+            );
+            for id in ids {
+                bookmark_of
+                    .entry(id.clone())
+                    .or_insert_with(|| name.clone());
+                heads.push(id.clone());
+            }
+        }
+        if heads.is_empty() {
+            return Ok(ChangesResponse {
+                operation_id: repo.op_id().hex(),
+                changes: Vec::new(),
+            });
+        }
+
+        // Everything reachable from a review bookmark and NOT from main. A stack of five
+        // commits on one bookmark is five changes, which is what Gerrit calls a relation chain.
+        let mut landed = Vec::new();
+        for (name, targets) in view.bookmarks() {
+            if name.as_str() == "main" {
+                landed.extend(targets.local_target.added_ids().cloned());
+                for (_, remote) in &targets.remote_refs {
+                    landed.extend(remote.target.added_ids().cloned());
+                }
+            }
+        }
+        let open = RevsetExpression::commits(heads)
+            .ancestors()
+            .minus(&RevsetExpression::commits(landed).ancestors());
+        let commits = open
+            .evaluate(repo)?
+            .stream()
+            .commits(repo.store())
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let mut changes = Vec::new();
+        for commit in commits {
+            let change_id = commit.change_id().reverse_hex();
+            let patch_sets = read_patch_sets(repo, &change_id)?.len();
+            let bookmark = bookmark_of
+                .get(commit.id())
+                .cloned()
+                // A commit partway up a stack carries no bookmark of its own; name the one
+                // whose tip it is beneath rather than showing nothing.
+                .or_else(|| bookmark_of.values().next().cloned())
+                .unwrap_or_default();
+            changes.push(ChangeSummary {
+                change_id,
+                commit_id: commit.id().hex(),
+                description: commit.description().to_owned(),
+                author_name: commit.author().name.clone(),
+                authored_at: commit.author().timestamp.to_datetime()?.to_rfc3339(),
+                bookmark,
+                patch_sets,
+                has_conflict: commit.has_conflict(),
+            });
+        }
+
+        Ok(ChangesResponse {
+            operation_id: repo.op_id().hex(),
+            changes,
+        })
+    })
+    .await?;
+    Ok(Json(response))
+}
+
+/// One change and every version of it that has been pushed.
+async fn change(
+    State(state): State<AppState>,
+    AxumPath(change_id): AxumPath<String>,
+) -> Result<Json<ChangeDetail>, AppError> {
+    let path = state.repository.as_ref().clone();
+    let response = run_jj(move || async move {
+        let loaded = load_repository(&path).await?;
+        let repo = loaded.repo.as_ref();
+        let commit = resolve_visible_commit(repo, &change_id).await?;
+        let change_id = commit.change_id().reverse_hex();
+        let current = revision_from_commit(repo, &commit)?;
+
+        let recorded = read_patch_sets(repo, &change_id)?;
+        let latest = recorded.last().map(|(number, _)| *number);
+        let patch_sets = recorded
+            .into_iter()
+            .map(|(number, commit_id)| PatchSet {
+                number,
+                commit_id,
+                current: Some(number) == latest,
+            })
+            .collect();
+
+        let bookmark = repo
+            .view()
+            .bookmarks()
+            .filter(|(name, _)| name.as_str().starts_with("review/"))
+            .find(|(_, targets)| {
+                targets.local_target.added_ids().any(|id| id == commit.id())
+                    || targets
+                        .remote_refs
+                        .iter()
+                        .any(|(_, r)| r.target.added_ids().any(|id| id == commit.id()))
+            })
+            .map(|(name, _)| name.as_str().to_owned());
+
+        Ok(ChangeDetail {
+            operation_id: repo.op_id().hex(),
+            change_id,
+            current,
+            bookmark,
+            patch_sets,
+        })
+    })
+    .await?;
+    Ok(Json(response))
 }
 
 async fn bookmarks(State(state): State<AppState>) -> Result<Json<BookmarkResponse>, AppError> {
@@ -1155,6 +1350,38 @@ async fn read_text_or_markers(
     Ok(String::from_utf8(rendered.to_vec())
         .map(FileContents::Text)
         .unwrap_or(FileContents::Binary))
+}
+
+/// Patch sets recorded for `change_id`, oldest first.
+///
+/// Read straight from `refs/changes/<change-id>/<n>` through jj-lib's own git backend, so
+/// there is one source of truth and no shelling out. These refs are deliberately outside
+/// `refs/heads`, which is why jj does not surface them as bookmarks: importing them would make
+/// every version of a change a visible commit sharing one change id, and jj would then refuse
+/// to resolve it at all.
+fn read_patch_sets(repo: &ReadonlyRepo, change_id: &str) -> Result<Vec<(u32, String)>> {
+    let Some(backend) = repo
+        .store()
+        .backend_impl::<jj_lib::git_backend::GitBackend>()
+    else {
+        // Not a git-backed repo. Possible in principle, and not worth failing a whole page for.
+        return Ok(Vec::new());
+    };
+    let git = backend.git_repo();
+    let prefix = format!("refs/changes/{change_id}/");
+    let mut sets = Vec::new();
+    for reference in git.references()?.prefixed(prefix.as_bytes())? {
+        // gix yields a boxed dyn error the ? operator cannot convert; a bad ref should not
+        // take down the page, so name it and move on.
+        let reference = reference.map_err(|e| anyhow!("reading refs/changes: {e}"))?;
+        let name = String::from_utf8_lossy(reference.name().as_bstr()).into_owned();
+        let Some(number) = name.rsplit('/').next().and_then(|n| n.parse::<u32>().ok()) else {
+            continue;
+        };
+        sets.push((number, reference.id().to_string()));
+    }
+    sets.sort_by_key(|(number, _)| *number);
+    Ok(sets)
 }
 
 async fn read_text_value(

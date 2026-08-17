@@ -58,6 +58,8 @@ pkgs.rustPlatform.buildRustPackage {
   # `tests/conflict.rs` builds its fixture with the `jj` CLI, the same way cresset-sync's tests
   # drive `git`: a conflict made through the interface a person uses is the shape they will
   # actually meet. Without this the test silently fails to find `jj` in the sandbox.
-  nativeCheckInputs = [ pkgs.jujutsu ];
+  # jj for building fixtures, and git because the review tests drive a bare remote and pin
+  # patch-set refs directly — jj uses gix internally and does not put a `git` on PATH.
+  nativeCheckInputs = [ pkgs.jujutsu pkgs.git ];
   doCheck = true;
 }
