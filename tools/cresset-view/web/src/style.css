@@ -263,4 +263,15 @@ aside h2 strong { color: var(--muted); font: 500 10px/1.4 var(--mono); letter-sp
 .revision-facts code { font: 11px/1.4 var(--mono); color: var(--accent); }
 .revision-facts .muted { color: var(--muted); }
 .revision-hint { margin: 0; color: var(--muted); font-size: 12px; }
-.revision-pan[hidden] { display: none; }
+.revision-pan[hidden], .revision-search[hidden] { display: none; }
+
+/* The patch-set selector on a change. Small, because choosing a version is a secondary act —
+   the reader is here for the diff — but always visible, because reading a superseded version
+   without knowing it is the failure this whole mechanism exists to prevent. */
+.patch-sets { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.patch-sets button { min-width: 26px; padding: 3px 8px; color: var(--muted); font: 11px/1.4 "SFMono-Regular", monospace; background: var(--panel-bg); border: 1px solid var(--border-soft); border-radius: 5px; cursor: pointer; }
+.patch-sets button:hover { color: var(--text); border-color: var(--border); }
+.patch-sets button.selected { color: var(--accent); border-color: var(--accent); }
+.patch-sets button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.patch-note { color: var(--warning-text); background: var(--warning-bg); padding: 2px 8px; border-radius: 5px; font-size: 10px; }
+.signals em.revised { color: var(--accent); border-color: var(--accent); }

@@ -515,3 +515,82 @@ fn a_change_serves_every_patch_set_with_the_current_one_marked() {
     // patch sets are pinned.
     assert_eq!(value["change_id"], change);
 }
+
+/// A superseded patch set must be READABLE, not merely listed.
+///
+/// Patch sets live outside `refs/heads` so that importing them cannot make a change id
+/// divergent. The cost of that choice is that jj does not consider those commits visible, so
+/// the ordinary revset walk never finds them and the diff endpoint answered "revision does not
+/// resolve to a visible jj commit" — for the exact commits the system pins on purpose. Being
+/// able to read the version a comment was written against is the point of keeping it.
+#[test]
+fn a_superseded_patch_set_can_still_be_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, first) = review_repo(dir.path());
+
+    // Revise the change so patch set 1 is superseded and on no branch.
+    let work = dir.path().join("work");
+    std::fs::write(work.join("g.txt"), "one\ntwo\n").expect("write");
+    jj(&work, &["bookmark", "set", "review/thing", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "review/thing"]);
+    // Pin the new patch set as the post-receive hook does, so the change has both versions.
+    let second = jj(&work, &["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+    let out = Command::new("git")
+        .arg("--git-dir")
+        .arg(dir.path().join("canonical.git"))
+        .args(["update-ref", &format!("refs/changes/{change}/2"), &second])
+        .output()
+        .expect("pin patch set 2");
+    assert!(out.status.success());
+
+    // Re-clone AFTER the revision, so this repository never saw patch set 1 as a bookmark and
+    // jj therefore does not consider it visible. That is the ordinary case in production: the
+    // viewer refreshes every two minutes, so a change amended between refreshes is only ever
+    // reachable through its patch-set ref. The first version of this test cloned before the
+    // amend, so jj still remembered the commit and the fallback was never exercised.
+    let viewer = dir.path().join("viewer2");
+    let out = Command::new("jj")
+        .args(["git", "clone", "--colocate"])
+        .arg(dir.path().join("canonical.git"))
+        .arg(&viewer)
+        .env("JJ_CONFIG", "/dev/null")
+        .env("JJ_USER", "Test")
+        .env("JJ_EMAIL", "test@example.com")
+        .env("HOME", dir.path())
+        .output()
+        .expect("clone viewer");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&viewer)
+        .args(["fetch", "-q", "origin", "+refs/changes/*:refs/changes/*"])
+        .output()
+        .expect("fetch patch sets");
+    assert!(out.status.success());
+
+    let server = Server::start(&viewer);
+
+    // The full id reaches it.
+    let (status, _) = server.get_status(&format!("/api/revisions/{first}/diff"));
+    assert_eq!(
+        status, 200,
+        "the superseded patch set {first} must be readable; listing it and refusing to serve \
+         it makes pinning pointless"
+    );
+
+    // A PREFIX must not, because the fallback is an exact-id lookup by design — anything
+    // looser could resolve to a commit the reader never asked for.
+    let (status, _) = server.get_status(&format!("/api/revisions/{}/diff", &first[..12]));
+    assert_eq!(status, 400, "a prefix must not reach an invisible commit");
+
+    // And the change still lists both, so the two halves agree.
+    let body = server
+        .get(&format!("/api/changes/{change}"))
+        .expect("change served");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    assert_eq!(value["patch_sets"].as_array().expect("patch_sets").len(), 2);
+}

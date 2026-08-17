@@ -84,6 +84,36 @@ interface FileResponse {
   conflict?: ConflictView;
 }
 
+interface ChangeSummary {
+  change_id: string;
+  commit_id: string;
+  description: string;
+  author_name: string;
+  authored_at: string;
+  bookmark: string;
+  patch_sets: number;
+  has_conflict: boolean;
+}
+
+interface ChangesResponse {
+  operation_id: string;
+  changes: ChangeSummary[];
+}
+
+interface PatchSet {
+  number: number;
+  commit_id: string;
+  current: boolean;
+}
+
+interface ChangeDetail {
+  operation_id: string;
+  change_id: string;
+  current: Revision;
+  bookmark?: string;
+  patch_sets: PatchSet[];
+}
+
 interface ConflictTerm {
   label?: string;
   contents?: string;
@@ -97,7 +127,7 @@ interface ConflictView {
   materialized?: string;
 }
 
-type ViewMode = 'browse' | 'changes';
+type ViewMode = 'browse' | 'changes' | 'review';
 type ThemePreference = 'auto' | 'light' | 'dark';
 
 const app = document.querySelector<HTMLElement>('#app');
@@ -113,6 +143,7 @@ app.innerHTML = `
       <div class="mode-switch" aria-label="Viewer mode">
         <button type="button" data-mode="browse">Browse</button>
         <button type="button" data-mode="changes">Changes</button>
+        <button type="button" data-mode="review">Review</button>
       </div>
       <label class="theme-control">
         <span>Theme</span>
@@ -128,7 +159,7 @@ app.innerHTML = `
   <div id="sync-banner" class="sync-banner" hidden></div>
   <section class="workspace">
     <aside class="changes">
-      <h2><span>Revisions</span><strong id="head-count"></strong></h2>
+      <h2><span id="panel-title">Revisions</span><strong id="head-count"></strong></h2>
       <label class="revision-search">
         <input id="revision-search" type="search" placeholder="Search description, author, or id"
                aria-label="Search revisions" autocomplete="off" spellcheck="false">
@@ -156,6 +187,7 @@ const syncBanner = requiredElement('#sync-banner');
 const operation = requiredElement('#operation');
 const revisionList = requiredElement('#revision-list');
 const headCount = requiredElement('#head-count');
+const panelTitle = requiredElement('#panel-title');
 const revisionPan = requiredElement<HTMLInputElement>('#revision-pan');
 const revisionSearch = requiredElement<HTMLInputElement>('#revision-search');
 const fileTreeContainer = requiredElement('#file-tree');
@@ -458,10 +490,171 @@ function defaultModeFor(revision: Revision): ViewMode {
   return revision.working_copy ? 'browse' : 'changes';
 }
 
+/// Load the review queue into the revisions panel.
+///
+/// The queue reuses that panel rather than adding a fourth column: a change IS a revision
+/// here, so selecting one behaves like selecting a revision and the files and detail panes
+/// carry on working unchanged.
+async function loadReviewQueue() {
+  panelTitle.textContent = 'Review';
+  revisionSearch.closest('.revision-search')?.toggleAttribute('hidden', true);
+  revisionPan.closest('.revision-pan')?.toggleAttribute('hidden', true);
+  revisionList.classList.add('searching');
+  revisionList.replaceChildren();
+  revisionObserver?.disconnect();
+  revisionObserver = null;
+  revisionMoreButton = null;
+  revisionStatus = null;
+
+  headCount.textContent = 'loading';
+  let response: ChangesResponse;
+  try {
+    response = await fetchJson<ChangesResponse>('/api/changes');
+  } catch (error) {
+    headCount.textContent = '';
+    renderLoadFailure('the review queue', error);
+    return;
+  }
+
+  const count = response.changes.length;
+  headCount.textContent = `${count} open`;
+  if (count === 0) {
+    // An empty queue is the normal state, not a fault. Say what would fill it, because the
+    // convention is the only thing that puts a change here.
+    const empty = document.createElement('p');
+    empty.className = 'revision-status';
+    empty.textContent = 'Nothing is waiting for review. Push a change to a review/* bookmark.';
+    revisionList.append(empty);
+    content.innerHTML = '<p class="empty-state">No changes are open for review.</p>';
+    changeHeading.innerHTML = '<p>Review</p>';
+    return;
+  }
+
+  for (const change of response.changes) {
+    const button = document.createElement('button');
+    button.className = 'revision';
+    button.innerHTML = `
+      <span class="revision-copy">
+        <span class="revision-id">${escapeHtml(short(change.change_id))}</span>
+        <strong>${escapeHtml(firstLine(change.description) || '(no description)')}</strong>
+        <small>${escapeHtml(change.author_name)} · ${formatDateTime(change.authored_at)}</small>
+        <span class="signals">
+          <em>${escapeHtml(change.bookmark)}</em>
+          <em class="${change.patch_sets > 1 ? 'revised' : ''}">${change.patch_sets} patch set${change.patch_sets === 1 ? '' : 's'}</em>
+          ${change.has_conflict ? '<em class="warning">conflict</em>' : ''}
+        </span>
+      </span>`;
+    button.addEventListener('click', () => void selectChange(change.change_id, button));
+    revisionList.append(button);
+  }
+  // Open the first change, so the screen is useful without a click.
+  const first = revisionList.querySelector<HTMLButtonElement>('.revision');
+  if (first != null) await selectChange(response.changes[0].change_id, first);
+}
+
+/// Show one change: its patch sets, and the diff of whichever is selected.
+async function selectChange(changeId: string, button: HTMLButtonElement | null, patchSet?: string) {
+  currentRevisionButton?.classList.remove('selected');
+  currentRevisionButton = button;
+  button?.classList.add('selected');
+
+  let detail: ChangeDetail;
+  try {
+    detail = await fetchJson<ChangeDetail>(`/api/changes/${encodeURIComponent(changeId)}`);
+  } catch (error) {
+    renderLoadFailure(`change ${short(changeId)}`, error);
+    return;
+  }
+
+  const latest = detail.patch_sets.find((set) => set.current)?.commit_id ?? detail.current.commit_id;
+  const showing = patchSet ?? latest;
+  currentRevision = detail.current;
+  renderChangeHeading(detail, showing);
+
+  // The diff of the selected patch set, through the existing stream. Reading an OLD patch set
+  // is the point of keeping them, so this is not restricted to the current one.
+  const generation = ++selectionGeneration;
+  fileGeneration += 1;
+  diffController?.abort();
+  diffController = null;
+  diffParser?.terminate();
+  diffParser = null;
+  cleanContentRenderers();
+  content.textContent = 'Loading comparison…';
+  fileHeading.textContent = 'Loading changed files…';
+  const controller = new AbortController();
+  diffController = controller;
+  try {
+    await streamDiff(`/api/revisions/${showing}/diff`, controller.signal, async (event) => {
+      if (generation !== selectionGeneration) return;
+      if (event.type === 'metadata') {
+        fileHeading.textContent = `${event.paths.length.toLocaleString()} changed files`;
+        const prepared = prepareFileTreeInput(event.paths, { flattenEmptyDirectories: false });
+        renderFileTree(prepared, 'open', (path) => scrollToDiff(path, 'smooth-auto'));
+        setupCodeView(event.paths);
+        diffParser = new DiffParser();
+        return;
+      }
+      if (event.type === 'error') throw new Error(event.error);
+      const fileDiff = await diffParser!.parse(event);
+      if (generation !== selectionGeneration) return;
+      const item = codeViewItem(event.path, fileDiff, 1);
+      diffItems[event.index] = item;
+      loadedDiffPaths.add(event.path);
+      codeView?.updateItem(item);
+    });
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    if (generation !== selectionGeneration) return;
+    renderLoadFailure(`the diff of ${short(showing)}`, error);
+  } finally {
+    if (diffController === controller) diffController = null;
+  }
+}
+
+/// The heading for a change, with a control for choosing which patch set to read.
+function renderChangeHeading(detail: ChangeDetail, showing: string) {
+  const sets = detail.patch_sets;
+  changeHeading.innerHTML = `
+    <div><code>${escapeHtml(short(detail.change_id))}</code><span>change</span></div>
+    <h2>${escapeHtml(firstLine(detail.current.description) || '(no description)')}</h2>
+    <p>
+      ${detail.bookmark == null ? '' : `on <code>${escapeHtml(detail.bookmark)}</code> · `}
+      by ${escapeHtml(detail.current.author_name)}
+    </p>
+    ${sets.length === 0 ? '' : `
+      <div class="patch-sets" role="group" aria-label="Patch sets">
+        ${sets.map((set) => `
+          <button type="button" data-patch-set="${escapeHtml(set.commit_id)}"
+                  class="${set.commit_id === showing ? 'selected' : ''}">
+            ${set.number}${set.current ? '' : ''}
+          </button>`).join('')}
+        ${sets.length > 1 && showing !== (sets.find((s) => s.current)?.commit_id ?? '')
+          ? '<span class="patch-note">viewing a superseded version</span>' : ''}
+      </div>`}
+  `;
+  for (const button of changeHeading.querySelectorAll<HTMLButtonElement>('[data-patch-set]')) {
+    button.addEventListener('click', () => {
+      void selectChange(detail.change_id, currentRevisionButton, button.dataset.patchSet);
+    });
+  }
+}
+
 async function setMode(mode: ViewMode) {
   if (mode === currentMode) return;
+  const leavingReview = currentMode === 'review';
   currentMode = mode;
   syncModeButtons();
+  if (mode === 'review') {
+    await loadReviewQueue();
+    return;
+  }
+  if (leavingReview) {
+    // Coming back from the queue, the revisions panel is showing changes; rebuild it.
+    panelTitle.textContent = 'Revisions';
+    revisionSearch.closest('.revision-search')?.toggleAttribute('hidden', false);
+    await loadRevisionPage(true);
+  }
   if (currentRevision != null) {
     setViewUrl(currentRevision, null, false);
     await loadRevision(currentRevision, null);

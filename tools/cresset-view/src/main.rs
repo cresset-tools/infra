@@ -1170,6 +1170,19 @@ async fn load_repository(path: &Path) -> Result<LoadedRepository> {
     })
 }
 
+/// A full 40-character hex commit id, or `None`. Deliberately strict: this is the fallback for
+/// commits jj cannot see, so it must not guess.
+fn hex_to_commit_id(id: &str) -> Option<CommitId> {
+    if id.len() != 40 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(20);
+    for pair in id.as_bytes().chunks(2) {
+        bytes.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
+    }
+    Some(CommitId::new(bytes))
+}
+
 async fn resolve_visible_commit(repo: &ReadonlyRepo, id: &str) -> Result<Commit> {
     if id.len() < 8 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
         bail!("revision must be a jj change ID or commit ID prefix of at least 8 characters");
@@ -1187,7 +1200,22 @@ async fn resolve_visible_commit(repo: &ReadonlyRepo, id: &str) -> Result<Commit>
     }
 
     match matches.len() {
-        0 => Err(anyhow!("revision does not resolve to a visible jj commit")),
+        // Nothing visible. Before giving up, try the object store directly for an exact commit
+        // id — that is how a SUPERSEDED PATCH SET is reached.
+        //
+        // Patch sets live at refs/changes/<change-id>/<n>, deliberately outside refs/heads so
+        // that importing them cannot make a change id divergent. The cost of that choice is
+        // that jj does not consider those commits visible, so the revset walk above never sees
+        // them, and reading an old patch set — the entire reason they are pinned — returned
+        // "revision does not resolve to a visible jj commit".
+        //
+        // Safe because it demands the FULL id: the caller must already have the exact commit,
+        // which they only get from a patch-set ref we wrote. No prefix matching, so it cannot
+        // silently resolve to something the reader did not ask for.
+        0 => match hex_to_commit_id(id).and_then(|id| repo.store().get_commit(&id).ok()) {
+            Some(commit) => Ok(commit),
+            None => Err(anyhow!("revision does not resolve to a visible jj commit")),
+        },
         1 => Ok(matches.into_values().next().unwrap()),
         count => Err(anyhow!(
             "revision is ambiguous and resolves to {count} visible jj commits"
