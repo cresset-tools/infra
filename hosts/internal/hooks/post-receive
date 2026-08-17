@@ -18,6 +18,16 @@ while read -r _old new ref; do
     *) continue ;;
   esac
 
+  # A deletion carries the zero oid as the new value, and there is nothing to record for one:
+  # the patch sets already pinned under refs/changes/* are what keep the change readable, and
+  # they outlive the bookmark on purpose. Without this, `git rev-list 0000...` fails with
+  # `fatal: bad object` — and because the hook runs under `set -eu`, it aborts, so a push that
+  # deleted one review bookmark and updated another would silently skip the update. Deleting a
+  # landed bookmark is ordinary cleanup, which is how this was found.
+  if [ "$new" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
   # Commits carried by this bookmark that have not landed. `--not refs/heads/main` is what
   # makes a stack of five commits record five changes rather than the whole history.
   if git rev-parse --verify --quiet refs/heads/main >/dev/null; then

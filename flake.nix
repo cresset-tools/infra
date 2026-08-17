@@ -280,6 +280,24 @@
           test "$(git show "refs/changes/$cid/1:g.txt")" = one \
             || { echo "FAIL: patch set 1 unreadable from the viewer"; exit 1; }
 
+          # 6b. Deleting a landed review bookmark is ordinary cleanup and must be quiet.
+          #
+          #     The new oid is all zeros, and `git rev-list` on that fails with `fatal: bad
+          #     object`; under `set -eu` that aborts the hook, so a push deleting one bookmark
+          #     and updating another would skip the update. The pinned patch sets must survive
+          #     the bookmark, which is the whole reason they are separate refs.
+          cd "$TMPDIR/work"
+          before=$(g for-each-ref 'refs/changes/**' | wc -l)
+          jj bookmark delete review/thing >/dev/null
+          jj git push --deleted >/dev/null 2>del.txt \
+            || { echo "FAIL: deleting a review bookmark was rejected"; cat del.txt; exit 1; }
+          grep -q "bad object" del.txt \
+            && { echo "FAIL: the hook errored on a deletion"; cat del.txt; exit 1; }
+          test "$(g for-each-ref 'refs/changes/**' | wc -l)" = "$before" \
+            || { echo "FAIL: deleting the bookmark lost its patch sets"; exit 1; }
+          test -z "$(g for-each-ref 'refs/heads/review/thing')" \
+            || { echo "FAIL: the bookmark was not deleted"; exit 1; }
+
           # --- the approval gate ------------------------------------------------------------
           #
           # From here on, landing on main requires an approval. These checks are the contract
