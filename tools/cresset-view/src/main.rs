@@ -142,7 +142,10 @@ impl IntoResponse for AppError {
         (
             StatusCode::BAD_REQUEST,
             Json(ErrorBody {
-                error: self.0.to_string(),
+                // `{:#}` renders the whole context chain, not just the outermost message.
+                // "spawning git push" alone named the call and hid the reason — the binary was
+                // not on PATH — and a reader had no way to tell those apart.
+                error: format!("{:#}", self.0),
             }),
         )
             .into_response()
@@ -1254,7 +1257,7 @@ fn push_to_main(repository: &Path, config: &MergeConfig, tip: &str) -> Result<St
         // messages are the whole point of showing the result.
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
-        .context("spawning git push")?;
+        .context("running git push")?;
 
     let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stdout));

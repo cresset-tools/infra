@@ -227,6 +227,10 @@ in
     description = "Cresset jj repository viewer";
     wantedBy = [ "multi-user.target" ];
     after = [ "network.target" ];
+    # Landing a stack shells out to `git push` over ssh. The service read the repository
+    # through jj-lib and needed neither binary until the Merge button existed; without them
+    # the endpoint failed with "spawning git push", which named the call and not the cause.
+    path = [ pkgs.git pkgs.openssh ];
     unitConfig.ConditionPathExists = "/var/lib/cresset-view/repository/current/.jj";
     environment.RUST_LOG = "cresset_view=info,tower_http=info";
     # RequiresMountsFor is a [Unit] directive. It sat in serviceConfig until systemd was
