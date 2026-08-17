@@ -155,9 +155,14 @@ in
       # Where the update hook looks for approvals and for break-glass. In the repository's own
       # config rather than the hook text or the environment: a pusher cannot set these, and the
       # paths stay visible to anyone debugging a refused push with `git config --list`.
-      git -C ${bareRepo} config cresset.approvalsFile ${approvalsFile}
-      git -C ${bareRepo} config cresset.breakGlassFile ${breakGlassFile}
-      git -C ${bareRepo} config cresset.reviewUrl https://code.cresset.tools
+      #
+      # `--file` rather than `-C ${bareRepo}`: this runs as root against a repository owned by
+      # `git`, and git's dubious-ownership check then refuses to discover it — reporting
+      # `fatal: not in a git directory`, which reads like the path is wrong rather than like a
+      # permissions rule. Writing the config file directly needs no repository discovery.
+      git config --file ${bareRepo}/config cresset.approvalsFile ${approvalsFile}
+      git config --file ${bareRepo}/config cresset.breakGlassFile ${breakGlassFile}
+      git config --file ${bareRepo}/config cresset.reviewUrl https://code.cresset.tools
 
       # Belt-and-braces: keep the whole tree git-owned across redeploys (a push
       # or the local worker advance may have created objects as `git`).

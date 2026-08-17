@@ -28,8 +28,12 @@ use anyhow::{Context, Result};
 
 use crate::review::ApprovalRow;
 
-/// Readable by the owning service and by the `git` group that runs the hook; not world-readable.
-/// Nothing here is secret, but the reviewer names are not anyone else's business either.
+/// Readable by the owning service and by the `git` group that runs the hook.
+///
+/// The group half only works because the directory is setgid (see the tmpfiles rule in
+/// hosts/internal/configuration.nix): without it, a file created here belongs to
+/// cresset-view's own group and the hook cannot read the one file it exists to read. The
+/// failure is closed and loud, but it looks exactly like correct configuration.
 const MODE: u32 = 0o640;
 
 /// Render the file's contents. Separated from writing it so the format can be tested without a

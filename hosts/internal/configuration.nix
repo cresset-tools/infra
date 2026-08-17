@@ -200,11 +200,20 @@ in
     "d /var/lib/cresset-view 0750 cresset-view cresset-view -"
     "d /var/lib/cresset-view/repository 0750 cresset-view cresset-view -"
     # The handshake with the canonical repository's push gate: cresset-view writes the list of
-    # approved patch sets, and the update hook — running as `git` — reads it. Owned by the
-    # writer, readable by the `git` group, reachable by nobody else. It cannot live under
-    # /var/lib/cresset-view, whose directory is owner-only so the hook could not traverse it,
-    # and cresset-view has no business writing under /srv/git. See hosts/internal/hooks/update.
-    "d /var/lib/cresset-review 0750 cresset-view git -"
+    # approved patch sets, and the update hook — running as `git` — reads it. It cannot live
+    # under /var/lib/cresset-view, whose directory is owner-only so the hook could not traverse
+    # it, and cresset-view has no business writing under /srv/git.
+    #
+    # SETGID (the leading 2) is load-bearing, not tidiness. Without it the directory is group
+    # `git` but every file cresset-view creates inside it is group `cresset-view`, so the hook
+    # cannot read the very file it exists to read — and the gate then refuses every push while
+    # looking correctly configured. Measured on the box, not reasoned about: `runuser -u git --
+    # test -r` said no. Setgid makes new files inherit the directory's group.
+    "d /var/lib/cresset-review 2750 cresset-view git -"
+    # And correct a file written before the setgid bit was set. `z` adjusts what is already
+    # there without creating it, so this does not depend on cresset-view restarting after
+    # tmpfiles — an ordering that is true today and is not worth relying on.
+    "z /var/lib/cresset-review/approved 0640 cresset-view git -"
   ];
 
   systemd.services.cresset-view = {
