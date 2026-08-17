@@ -27,27 +27,23 @@ let
   gitHome = "/srv/git";
   bareRepo = "${gitHome}/cresset.git";
 
+  # The handshake between cresset-view and the push gate. cresset-view owns the directory and
+  # writes the file; the `git` group reads it from inside the update hook. Deliberately NOT
+  # under /var/lib/cresset-view, whose 0750 owner-only directory the hook could not traverse,
+  # and deliberately not under /srv/git, which cresset-view has no business writing to.
+  approvalsFile = "/var/lib/cresset-review/approved";
+
+  # Present means "let the next push to main through without approvals, then delete me".
+  # Under /srv/git because the hook runs as `git` and must be able to remove it; creating it
+  # needs host access, which is the point.
+  breakGlassFile = "${gitHome}/break-glass";
+
   # git-shell as the login shell: refuses interactive ssh and only runs the
   # git-shell command whitelist. This is what makes `git@internal` a git-only
   # account even before the per-key restrictions below.
   gitShell = "${pkgs.git}/bin/git-shell";
 
 
-  # Protect `main` — and ONLY `main` — from rewrites and deletion.
-  #
-  # The export model rests on `main` moving forward only. A checkpoint is a pair
-  # `(downstream SHA, monorepo commit)`, and it is meaningless the moment that monorepo
-  # commit stops being an ancestor of `main`; since the worker never force-pushes a
-  # downstream branch, it cannot repair such a history, it can only behave strangely.
-  #
-  # The blunt tool for this — `receive.denyNonFastForwards` — would be a mistake here. jj
-  # rewrites commits as a matter of course: amending a change during review produces new
-  # commit ids, so re-pushing a feature bookmark for a second round of review is inherently
-  # a non-fast-forward. Refusing those globally would break exactly the multi-round internal
-  # review the monorepo exists to support, in order to protect a single ref.
-  #
-  # So: a hook that constrains `refs/heads/main` and leaves every other ref alone. Rewrite
-  # feature bookmarks as much as you like; land on `main` once, forward.
   # Record every patch set pushed for review, so an amend cannot make the previous one
   # unreachable. See hooks/post-receive for the reasoning; kept as a plain script rather
   # than inlined here so a test can exercise the byte-for-byte file the host installs
@@ -58,28 +54,17 @@ let
     text = builtins.readFile ./hooks/post-receive;
   };
 
-  protectMain = pkgs.writeShellScript "cresset-canonical-update-hook" ''
-    set -eu
-    ref="$1"; old="$2"; new="$3"
-    zero=0000000000000000000000000000000000000000
-
-    [ "$ref" = "refs/heads/main" ] || exit 0
-
-    if [ "$new" = "$zero" ]; then
-      echo "refusing to delete $ref: it is the canonical branch the synchronizer exports from" >&2
-      exit 1
-    fi
-    if [ "$old" = "$zero" ]; then
-      exit 0
-    fi
-    if ! git merge-base --is-ancestor "$old" "$new"; then
-      echo "refusing to rewrite $ref: $old is not an ancestor of $new." >&2
-      echo "Every exported checkpoint anchors a commit on this branch, and the synchronizer" >&2
-      echo "never force-pushes downstream, so a rewrite here cannot be undone there." >&2
-      echo "Rewrite freely on a feature bookmark; land on main only by fast-forward." >&2
-      exit 1
-    fi
-  '';
+  # Guard `main`: fast-forward only, no deletion, and every landing commit approved in
+  # cresset-view. See hooks/update — the reasoning is long enough to belong beside the code,
+  # and keeping it in a file is what lets the flake check run the bytes the host installs.
+  #
+  # `logger` for the break-glass audit line; `git` because a hook inherits receive-pack's
+  # environment and should not depend on what happens to be on its PATH.
+  protectMain = pkgs.writeShellApplication {
+    name = "cresset-canonical-update";
+    runtimeInputs = [ pkgs.git pkgs.util-linux ];
+    text = builtins.readFile ./hooks/update;
+  };
 
   # Belt-and-braces per-key hardening: even though git-shell already blocks
   # everything but push/pull, disable the ssh side channels too.
@@ -164,8 +149,15 @@ in
       # one — silently, with no error and no rejection — so a link into a store path that ever
       # went missing would disable this protection without anyone noticing. A copy cannot dangle,
       # and re-installing it on every activation keeps it current.
-      install -o git -g git -m 0755 ${protectMain} ${bareRepo}/hooks/update
+      install -o git -g git -m 0755 ${protectMain}/bin/cresset-canonical-update ${bareRepo}/hooks/update
       install -o git -g git -m 0755 ${recordPatchSets}/bin/cresset-canonical-post-receive ${bareRepo}/hooks/post-receive
+
+      # Where the update hook looks for approvals and for break-glass. In the repository's own
+      # config rather than the hook text or the environment: a pusher cannot set these, and the
+      # paths stay visible to anyone debugging a refused push with `git config --list`.
+      git -C ${bareRepo} config cresset.approvalsFile ${approvalsFile}
+      git -C ${bareRepo} config cresset.breakGlassFile ${breakGlassFile}
+      git -C ${bareRepo} config cresset.reviewUrl https://code.cresset.tools
 
       # Belt-and-braces: keep the whole tree git-owned across redeploys (a push
       # or the local worker advance may have created objects as `git`).

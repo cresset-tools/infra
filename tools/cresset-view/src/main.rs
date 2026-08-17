@@ -4,6 +4,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod approvals;
 mod review;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -57,6 +58,13 @@ struct Args {
     #[arg(long, env = "CRESSET_VIEW_REVIEW_DB")]
     review_db: Option<PathBuf>,
 
+    /// Where to project approvals for the canonical repository's push gate to read.
+    ///
+    /// Optional, and absent on any instance that is not the one beside the canonical repo. See
+    /// `approvals.rs` for why the gate reads a file rather than the database.
+    #[arg(long, env = "CRESSET_VIEW_APPROVALS_FILE")]
+    approvals_file: Option<PathBuf>,
+
     /// The cresset-sync checkpoint database, read read-only to surface synchronization state.
     ///
     /// Optional on purpose. cresset-view is a repository viewer first; the worker may not be
@@ -84,6 +92,7 @@ struct AppState {
     repository: Arc<PathBuf>,
     sync_db: Option<Arc<PathBuf>>,
     review_db: Option<Arc<PathBuf>>,
+    approvals_file: Option<Arc<PathBuf>>,
 }
 
 #[derive(Debug)]
@@ -423,13 +432,22 @@ async fn main() -> Result<()> {
         repository: Arc::new(args.repository),
         sync_db: args.sync_db.map(Arc::new),
         review_db: args.review_db.map(Arc::new),
+        approvals_file: args.approvals_file.map(Arc::new),
     };
+    // Regenerate before serving. The file is a projection of the database, and the push gate
+    // fails closed on a missing one — so a file lost to a redeployed state directory would
+    // silently block every push until someone approved something new. Rebuilding it at startup
+    // makes that self-repairing rather than a mystery.
+    if let Err(error) = republish_approvals(&state) {
+        tracing::error!(%error, "could not write the approvals file; pushes to main will be refused");
+    }
     let index = args.assets.join("index.html");
     let static_files = ServeDir::new(&args.assets).not_found_service(ServeFile::new(index));
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/repository", get(repository))
+        .route("/api/identity", get(identity))
         .route("/api/revisions", get(revisions))
         .route("/api/revisions/{id}", get(revision))
         .route("/api/bookmarks", get(bookmarks))
@@ -441,6 +459,10 @@ async fn main() -> Result<()> {
         )
         .route("/api/threads/{id}/comments", post(reply_to_thread))
         .route("/api/threads/{id}/resolve", post(resolve_thread))
+        .route(
+            "/api/changes/{id}/approvals",
+            get(list_approvals).post(set_approval),
+        )
         .route("/api/sync", get(sync_status))
         .route("/api/revisions/{id}/tree", get(tree))
         .route("/api/revisions/{id}/file", get(file))
@@ -995,6 +1017,98 @@ async fn resolve_thread(
         Some(thread) => Ok(Json(thread)),
         None => Err(anyhow!("no thread {thread_id}").into()),
     }
+}
+
+#[derive(Serialize)]
+struct IdentityResponse {
+    username: String,
+}
+
+/// Who the proxy says the caller is.
+///
+/// The browser needs this to render "your" approval differently from someone else's, and it
+/// cannot know it any other way: the header is added by nginx and never reaches the page.
+/// Read-only and derived entirely from the request, so it says nothing a caller did not already
+/// prove by getting this far.
+async fn identity(Extension(who): Extension<Identity>) -> Json<IdentityResponse> {
+    Json(IdentityResponse { username: who.0 })
+}
+
+#[derive(Deserialize)]
+struct ApprovalBody {
+    /// The exact patch set being approved. Required, and not inferred from "the latest": the
+    /// reviewer approves what they read, and between loading the page and pressing the button a
+    /// new patch set may have been pushed.
+    commit_id: String,
+    approved: bool,
+}
+
+#[derive(Serialize)]
+struct ApprovalsResponse {
+    change_id: String,
+    approvals: Vec<review::ApprovalRow>,
+    /// Whether this instance can gate pushes at all. False means approving still records who
+    /// read what, but nothing enforces it — worth saying rather than implying a gate that is
+    /// not there.
+    gated: bool,
+}
+
+async fn list_approvals(
+    State(state): State<AppState>,
+    AxumPath(change_id): AxumPath<String>,
+) -> Result<Json<ApprovalsResponse>, AppError> {
+    let db = open_review(&state)?;
+    Ok(Json(ApprovalsResponse {
+        approvals: db.approvals_for_change(&change_id)?,
+        change_id,
+        gated: state.approvals_file.is_some(),
+    }))
+}
+
+async fn set_approval(
+    State(state): State<AppState>,
+    AxumPath(change_id): AxumPath<String>,
+    Extension(identity): Extension<Identity>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<ApprovalBody>,
+) -> Result<Json<ApprovalsResponse>, AppError> {
+    ensure_same_origin(&headers)?;
+    // The gate matches on the exact string, so a short id or stray whitespace would record an
+    // approval that can never be found and refuse the push it was meant to allow.
+    let commit_id = body.commit_id.trim();
+    if commit_id.len() != 40 || !commit_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(anyhow!("a patch set is identified by its full 40-character commit id").into());
+    }
+
+    let db = open_review(&state)?;
+    if body.approved {
+        db.approve(&change_id, commit_id, &identity.0)?;
+    } else {
+        db.withdraw(&change_id, commit_id, &identity.0)?;
+    }
+
+    // The file is what the push gate reads, so a failure to write it must reach the reviewer
+    // rather than being logged: they would otherwise see an approval recorded and a push refused
+    // for no visible reason.
+    if let Some(path) = state.approvals_file.as_ref() {
+        approvals::write(path.as_ref(), &db.all_approvals()?)
+            .context("recording the approval for the push gate")?;
+    }
+
+    Ok(Json(ApprovalsResponse {
+        approvals: db.approvals_for_change(&change_id)?,
+        change_id,
+        gated: state.approvals_file.is_some(),
+    }))
+}
+
+/// Rebuild the approvals file from the database. Run at startup; see `approvals.rs`.
+fn republish_approvals(state: &AppState) -> Result<()> {
+    let Some(path) = state.approvals_file.as_ref() else {
+        return Ok(());
+    };
+    let db = open_review(state).context("opening the review database to publish approvals")?;
+    approvals::write(path.as_ref(), &db.all_approvals()?)
 }
 
 async fn bookmarks(State(state): State<AppState>) -> Result<Json<BookmarkResponse>, AppError> {

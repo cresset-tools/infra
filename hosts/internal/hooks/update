@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -eu
+
+# Guard `refs/heads/main` — and only `refs/heads/main`.
+#
+# Landing here is what publishes: the sync worker exports this branch to 31 GitHub
+# repositories, 27 of them public, on a five-minute timer. There is no other gate. So this hook
+# enforces two things about the branch, and nothing about any other ref.
+#
+# 1. It only moves forward. A checkpoint is a pair (downstream SHA, monorepo commit) and is
+#    meaningless the moment that commit stops being an ancestor of main; the worker never
+#    force-pushes downstream, so it cannot repair such a history, only behave strangely.
+#
+#    `receive.denyNonFastForwards` would be the blunt version and would be wrong here: jj
+#    rewrites commits as a matter of course, so re-pushing a review bookmark for a second round
+#    is inherently a non-fast-forward. Refusing those globally would break the multi-round
+#    review this repository exists to support, in order to protect one ref.
+#
+# 2. Every commit it adds has been read by someone. That is the part this hook exists for now.
+#
+# Runs as the `git` user inside receive-pack, so it has no jj, no network, and no database. It
+# reads a flat file that cresset-view projects from the review store; see
+# tools/cresset-view/src/approvals.rs for why that is a file and not SQLite.
+
+ref="$1"; old="$2"; new="$3"
+zero=0000000000000000000000000000000000000000
+
+[ "$ref" = "refs/heads/main" ] || exit 0
+
+# Paths come from the repository's own git config rather than the environment. A pusher cannot
+# set them (git-shell forbids interactive ssh, and sshd forwards no environment), and a test can
+# point them at a scratch directory while running this exact file rather than a copy of it.
+approvals=$(git config --default /var/lib/cresset-review/approved cresset.approvalsFile)
+breakGlass=$(git config --default /srv/git/break-glass cresset.breakGlassFile)
+reviewUrl=$(git config --default https://code.cresset.tools cresset.reviewUrl)
+
+if [ "$new" = "$zero" ]; then
+  echo "refusing to delete $ref: it is the canonical branch the synchronizer exports from" >&2
+  exit 1
+fi
+
+# Creating the branch is bootstrapping a repository, not landing work on one. There is no
+# history to gate and nothing yet to protect.
+if [ "$old" = "$zero" ]; then
+  exit 0
+fi
+
+if ! git merge-base --is-ancestor "$old" "$new"; then
+  echo "refusing to rewrite $ref: $old is not an ancestor of $new." >&2
+  echo "Every exported checkpoint anchors a commit on this branch, and the synchronizer" >&2
+  echo "never force-pushes downstream, so a rewrite here cannot be undone there." >&2
+  echo "Rewrite freely on a review bookmark; land on main only by fast-forward." >&2
+  exit 1
+fi
+
+# --- the approval gate -----------------------------------------------------------------------
+
+# Fail closed. A gate that opens when its input is missing is not a gate, and the failure to
+# avoid is discovering that during an incident. Break-glass below is the deliberate way past it.
+if [ ! -r "$approvals" ]; then
+  approved=""
+  readable=no
+else
+  approved=$(cat "$approvals")
+  readable=yes
+fi
+
+unapproved=""
+for sha in $(git rev-list "$old..$new"); do
+  # The jj change id is an ordinary commit header, so plain git can read it. `/^$/q` stops at
+  # the blank line ending the header block, so a commit message that happens to contain a line
+  # beginning "change-id " cannot masquerade as one.
+  cid=$(git cat-file commit "$sha" | sed -n '/^$/q; s/^change-id //p')
+
+  if [ -z "$cid" ]; then
+    unapproved="$unapproved$(git rev-parse --short "$sha")	(no change-id; pushed by plain git, so it was never reviewable)
+"
+    continue
+  fi
+
+  # The pair, not just the change: an approval says "I read this", and after an amend nobody has
+  # read the thing that would land.
+  if [ "$readable" = yes ] && printf '%s\n' "$approved" | grep -qxF "$cid $sha"; then
+    continue
+  fi
+  unapproved="$unapproved$(git rev-parse --short "$sha")	$cid	$reviewUrl/?change=$cid
+"
+done
+
+if [ -z "$unapproved" ]; then
+  exit 0
+fi
+
+# Break-glass: one push, then the file is gone. Deliberate, available without a code change, and
+# impossible to leave switched on by accident. Consumed only when it would actually change the
+# outcome, so it is not silently spent on a push that was going to succeed anyway.
+if [ -e "$breakGlass" ]; then
+  rm -f "$breakGlass"
+  echo "BREAK-GLASS: $breakGlass was present; allowing this push and removing it." >&2
+  echo "The following commits reached main without an approval:" >&2
+  printf '%s' "$unapproved" >&2
+  # Also to the journal, where it outlives the pusher's terminal.
+  logger -t cresset-canonical -p auth.warning \
+    "break-glass consumed: unapproved commits pushed to main" 2>/dev/null || true
+  exit 0
+fi
+
+echo "refusing to land on $ref: not every commit has been approved." >&2
+echo >&2
+if [ "$readable" = no ]; then
+  echo "The approvals file $approvals could not be read, so NOTHING is approved." >&2
+  echo "This is deliberate — the gate fails closed — but it may mean cresset-view is not" >&2
+  echo "running rather than that the work is unreviewed." >&2
+  echo >&2
+fi
+printf '%s' "$unapproved" >&2
+echo >&2
+echo "Approve each of these in cresset-view, then push again. An approval covers one exact" >&2
+echo "patch set, so amending after approving means approving the new version." >&2
+echo "To land without one, on the host: touch $breakGlass  (good for a single push)." >&2
+exit 1

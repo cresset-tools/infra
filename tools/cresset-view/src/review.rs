@@ -55,6 +55,22 @@ CREATE TABLE IF NOT EXISTS comment (
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX IF NOT EXISTS comment_thread_idx ON comment (thread_id, id);
+
+-- An approval of one patch set by one person.
+--
+-- Keyed to the COMMIT id, not just the change: this is Gerrit's rule, and the reason for it is
+-- the whole point of the gate. An approval says "I read this", and after an amend nobody has
+-- read the thing that would land. So a new patch set starts unapproved, and the row approving
+-- its predecessor stays as a record of what was actually read rather than being carried
+-- forward onto text nobody looked at.
+CREATE TABLE IF NOT EXISTS approval (
+    change_id TEXT NOT NULL,
+    commit_id TEXT NOT NULL,
+    approved_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (change_id, commit_id, approved_by)
+);
+CREATE INDEX IF NOT EXISTS approval_change_idx ON approval (change_id);
 "#;
 
 /// Which side of a diff a thread hangs off, matching `@pierre/diffs`' `AnnotationSide`.
@@ -108,6 +124,14 @@ pub struct ThreadRow {
     pub created_by: String,
     pub created_at: i64,
     pub comments: Vec<CommentRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApprovalRow {
+    pub change_id: String,
+    pub commit_id: String,
+    pub approved_by: String,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -250,6 +274,59 @@ impl Review {
         Ok(threads)
     }
 
+    /// Record that `who` has read this exact patch set. Approving twice is not an error.
+    pub fn approve(&self, change_id: &str, commit_id: &str, who: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO approval (change_id, commit_id, approved_by)
+             VALUES (?1, ?2, ?3)",
+            params![change_id, commit_id, who],
+        )?;
+        Ok(())
+    }
+
+    /// Withdraw one person's approval of one patch set.
+    ///
+    /// Withdrawing is deliberately possible: noticing a problem after approving is ordinary, and
+    /// the alternative — an approval that can only be invalidated by pushing a new patch set —
+    /// would make people hesitate before approving at all.
+    pub fn withdraw(&self, change_id: &str, commit_id: &str, who: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM approval WHERE change_id = ?1 AND commit_id = ?2 AND approved_by = ?3",
+            params![change_id, commit_id, who],
+        )?;
+        Ok(())
+    }
+
+    pub fn approvals_for_change(&self, change_id: &str) -> Result<Vec<ApprovalRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT change_id, commit_id, approved_by, created_at
+             FROM approval WHERE change_id = ?1 ORDER BY created_at, approved_by",
+        )?;
+        let rows = stmt.query_map(params![change_id], approval_from_row)?;
+        let mut approvals = Vec::new();
+        for row in rows {
+            approvals.push(row?);
+        }
+        Ok(approvals)
+    }
+
+    /// Every approval, for projecting the file the push gate reads.
+    ///
+    /// Ordered so the file is byte-identical for identical state: it is rewritten on every
+    /// change, and a file whose lines shuffle produces noise in anything watching it.
+    pub fn all_approvals(&self) -> Result<Vec<ApprovalRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT change_id, commit_id, approved_by, created_at
+             FROM approval ORDER BY change_id, commit_id, approved_by",
+        )?;
+        let rows = stmt.query_map([], approval_from_row)?;
+        let mut approvals = Vec::new();
+        for row in rows {
+            approvals.push(row?);
+        }
+        Ok(approvals)
+    }
+
     fn comments_for(&self, thread_id: i64) -> Result<Vec<CommentRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, body, author, patch_set_commit_id, created_at
@@ -270,6 +347,15 @@ impl Review {
         }
         Ok(comments)
     }
+}
+
+fn approval_from_row(row: &Row<'_>) -> rusqlite::Result<ApprovalRow> {
+    Ok(ApprovalRow {
+        change_id: row.get(0)?,
+        commit_id: row.get(1)?,
+        approved_by: row.get(2)?,
+        created_at: row.get(3)?,
+    })
 }
 
 /// Nested Result so an unrecognised `side` is a typed error rather than a panic, matching the

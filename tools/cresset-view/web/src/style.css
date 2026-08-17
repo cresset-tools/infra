@@ -341,3 +341,24 @@ aside h2 strong { color: var(--muted); font: 500 10px/1.4 var(--mono); letter-sp
 .thread-error { margin: 0; color: var(--warning-text); background: var(--warning-bg); padding: 5px 8px; font-size: 11px; }
 
 .thread-count { color: var(--accent); }
+
+/* Approving a patch set. Sits under the patch-set selector because it is about the version on
+   screen, not about "the change" — approving while reading a superseded version approves that
+   version, and the wording says so rather than leaving it to be found at push time. */
+.approval { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.approval button {
+  padding: 4px 12px;
+  font: 600 11px/1.4 var(--sans);
+  color: var(--tag-text);
+  background: var(--tag-bg);
+  border: 1px solid var(--tag-bg);
+  cursor: pointer;
+}
+.approval button.withdraw { color: var(--text); background: var(--panel-bg); border-color: var(--border); }
+.approval button:hover:not(:disabled) { border-color: var(--accent); }
+.approval button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.approval button:disabled { opacity: .5; cursor: progress; }
+.approval-state { font: 500 10px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.approval-state.approved { color: var(--accent); }
+/* Anything that would make a push fail despite an approval existing. */
+.approval-note { color: var(--warning-text); background: var(--warning-bg); padding: 2px 8px; font-size: 10px; }

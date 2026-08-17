@@ -6,10 +6,16 @@ public API and interface intentionally contain no Git concepts.
 
 **The repository is read-only; review is not.** Nothing here ever writes to the
 repository — it does not snapshot the working copy, create commits, or move
-bookmarks. Code review comments are the one thing the service writes, and they
-go to a separate SQLite database given by `--review-db`, never into git. An
-instance started without that flag serves the review queue and its diffs and
+bookmarks. Review comments and approvals are the only things the service writes,
+and they go to a separate SQLite database given by `--review-db`, never into git.
+An instance started without that flag serves the review queue and its diffs and
 refuses writes with an explanation.
+
+`--approvals-file` projects approvals to a flat file for the canonical
+repository's push gate (`hosts/internal/hooks/update`) to read. The gate runs as
+another user inside `receive-pack`, so it reads a file rather than this database
+— see `src/approvals.rs` for why. Without the flag, approvals are still recorded
+and the UI says plainly that nothing enforces them.
 
 Authentication is not implemented in the application. Production deployment
 binds it to loopback behind nginx and Authentik forward-auth. Because that means

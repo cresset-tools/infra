@@ -185,6 +185,11 @@
             runtimeInputs = [ pkgs.git ];
             text = builtins.readFile ./hosts/internal/hooks/post-receive;
           };
+          updateHook = pkgs.writeShellApplication {
+            name = "update";
+            runtimeInputs = [ pkgs.git pkgs.util-linux ];
+            text = builtins.readFile ./hosts/internal/hooks/update;
+          };
         in
         pkgs.runCommand "canonical-review-hooks" {
           nativeBuildInputs = [ pkgs.git pkgs.jujutsu ];
@@ -195,6 +200,11 @@
 
           git init -q --bare -b main canonical.git
           install -m 0755 ${hook}/bin/post-receive canonical.git/hooks/post-receive
+          install -m 0755 ${updateHook}/bin/update canonical.git/hooks/update
+          # Where the host points these too, only inside the sandbox. Config rather than
+          # environment for the same reason as in production: a pusher cannot set it.
+          git --git-dir=canonical.git config cresset.approvalsFile "$TMPDIR/approved"
+          git --git-dir=canonical.git config cresset.breakGlassFile "$TMPDIR/break-glass"
           bare="$TMPDIR/canonical.git"
           g() { git --git-dir="$bare" "$@"; }
 
@@ -269,6 +279,111 @@
           # And both versions are still readable, which is the point of keeping them.
           test "$(git show "refs/changes/$cid/1:g.txt")" = one \
             || { echo "FAIL: patch set 1 unreadable from the viewer"; exit 1; }
+
+          # --- the approval gate ------------------------------------------------------------
+          #
+          # From here on, landing on main requires an approval. These checks are the contract
+          # between cresset-view and the hook; if they drift, either nothing can be pushed or
+          # unreviewed code reaches 31 GitHub repositories.
+          #
+          # Each change is pushed for review BEFORE being landed, which is both the real
+          # workflow and the thing that fixes its commit id: a reviewer approves the id they
+          # were shown, and that id came from a pushed patch set. Staging straight onto main
+          # from the working copy gives an id that changes again at push time -- which is how
+          # this check first failed, and worth knowing before debugging a refused push.
+
+          cd "$TMPDIR/work"
+
+          # Put a change on a review bookmark and leave @ off it, then answer with its ids.
+          submit() {
+            jj new main -m "$1" >/dev/null
+            printf '%s\n' "$3" > "$2"
+            jj bookmark set "review/$4" -r @ >/dev/null
+            jj new >/dev/null
+            jj git push -b "review/$4" >/dev/null 2>&1
+          }
+
+          submit "work to land" h.txt landed land
+          land=$(jj log -r 'review/land' --no-graph -T 'commit_id')
+          landCid=$(jj log -r 'review/land' --no-graph -T 'change_id')
+          jj bookmark set main -r 'review/land' >/dev/null
+
+          # 7. Fail closed. There is no approvals file at all yet, and that must refuse rather
+          #    than wave the push through -- a gate that opens when its input is missing is not
+          #    a gate.
+          if jj git push -b main >/dev/null 2>push.txt; then
+            echo "FAIL: a push landed with no approvals file"; cat push.txt; exit 1
+          fi
+          grep -q "could not be read" push.txt \
+            || { echo "FAIL: the refusal must say the file was unreadable"; cat push.txt; exit 1; }
+
+          # 8. An empty approvals file is still a refusal, and names what to approve and where.
+          : > "$TMPDIR/approved"
+          if jj git push -b main >/dev/null 2>push.txt; then
+            echo "FAIL: a push landed with nothing approved"; cat push.txt; exit 1
+          fi
+          grep -q "$landCid" push.txt \
+            || { echo "FAIL: the refusal must name the unapproved change"; cat push.txt; exit 1; }
+          grep -q "code.cresset.tools/?change=$landCid" push.txt \
+            || { echo "FAIL: the refusal must say where to review it"; cat push.txt; exit 1; }
+
+          # 9. Approving the exact patch set lets it through. This is the format cresset-view
+          #    writes; tools/cresset-view/src/approvals.rs asserts the other side of it.
+          echo "$landCid $land" > "$TMPDIR/approved"
+          jj git push -b main >/dev/null 2>push.txt \
+            || { echo "FAIL: an approved push was refused"; cat push.txt; exit 1; }
+          test "$(g rev-parse refs/heads/main)" = "$land" \
+            || { echo "FAIL: main did not advance to the approved commit"; exit 1; }
+
+          # 10. Approval is keyed to the COMMIT, not the change. Amending after approving means
+          #     nobody has read what would land, so the stale line must not satisfy the gate.
+          submit "second" i.txt more second
+          secondCid=$(jj log -r 'review/second' --no-graph -T 'change_id')
+          echo "$secondCid $(jj log -r 'review/second' --no-graph -T 'commit_id')" > "$TMPDIR/approved"
+          jj edit 'review/second' >/dev/null
+          echo more-amended > i.txt
+          jj bookmark set review/second -r @ >/dev/null
+          jj new >/dev/null
+          jj git push -b review/second >/dev/null 2>&1
+          jj bookmark set main -r 'review/second' >/dev/null
+          if jj git push -b main >/dev/null 2>push.txt; then
+            echo "FAIL: an approval of an earlier patch set satisfied the gate"; cat push.txt; exit 1
+          fi
+
+          # 11. Break-glass: one push, then it is gone, and it says so loudly.
+          touch "$TMPDIR/break-glass"
+          jj git push -b main >/dev/null 2>push.txt \
+            || { echo "FAIL: break-glass did not let the push through"; cat push.txt; exit 1; }
+          grep -q "BREAK-GLASS" push.txt \
+            || { echo "FAIL: break-glass must announce itself"; cat push.txt; exit 1; }
+          test ! -e "$TMPDIR/break-glass" \
+            || { echo "FAIL: break-glass was not consumed"; exit 1; }
+
+          # 12. And it really was one-shot.
+          submit "third" j.txt third third
+          jj bookmark set main -r 'review/third' >/dev/null
+          if jj git push -b main >/dev/null 2>push.txt; then
+            echo "FAIL: break-glass allowed a second push"; cat push.txt; exit 1
+          fi
+
+          # 13. THE PROPERTY MOST LIKELY TO BE BROKEN LATER. The sync worker advances main with
+          #     a local `git update-ref`, which does not run hooks. That is not an oversight to
+          #     be tidied up: imported work was reviewed on GitHub, and gating it here would
+          #     stop synchronization dead. If someone ever "fixes" the inconsistency by making
+          #     the worker push over SSH, this check is what says no.
+          before=$(g rev-parse refs/heads/main)
+          worker=$(jj log -r 'review/third' --no-graph -T 'commit_id')
+          g update-ref refs/heads/main "$worker" "$before"
+          test "$(g rev-parse refs/heads/main)" = "$worker" \
+            || { echo "FAIL: a local update-ref must bypass the gate"; exit 1; }
+
+          # 14. The gate is on main alone. Review bookmarks stay freely pushable, or the loop
+          #     the gate exists to encourage would be the one thing it blocked. (`submit` has
+          #     been pushing them unapproved all along; assert it rather than leaving it
+          #     implied, so a gate widened to every ref fails here and not in someone's day.)
+          submit "for review" k.txt r gated
+          jj git push -b review/gated >/dev/null 2>push.txt \
+            || { echo "FAIL: pushing for review must not need approval"; cat push.txt; exit 1; }
 
           echo "all canonical hook checks passed"
           touch $out

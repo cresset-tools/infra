@@ -199,6 +199,12 @@ in
   systemd.tmpfiles.rules = [
     "d /var/lib/cresset-view 0750 cresset-view cresset-view -"
     "d /var/lib/cresset-view/repository 0750 cresset-view cresset-view -"
+    # The handshake with the canonical repository's push gate: cresset-view writes the list of
+    # approved patch sets, and the update hook — running as `git` — reads it. Owned by the
+    # writer, readable by the `git` group, reachable by nobody else. It cannot live under
+    # /var/lib/cresset-view, whose directory is owner-only so the hook could not traverse it,
+    # and cresset-view has no business writing under /srv/git. See hosts/internal/hooks/update.
+    "d /var/lib/cresset-review 0750 cresset-view git -"
   ];
 
   systemd.services.cresset-view = {
@@ -227,7 +233,7 @@ in
       # holds it, and that is deliberately survivable rather than fatal. If it proves flaky in
       # practice, the fix is for the worker to write a small JSON snapshot after each pass and
       # for this to read that instead — a plain file read has none of these problems.
-      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080 --sync-db /srv/sync/state.db --review-db /var/lib/cresset-view/review.db";
+      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080 --sync-db /srv/sync/state.db --review-db /var/lib/cresset-view/review.db --approvals-file /var/lib/cresset-review/approved";
       Restart = "on-failure";
       RestartSec = "3s";
       NoNewPrivileges = true;
@@ -236,10 +242,10 @@ in
       ProtectHome = true;
       ProtectSystem = "strict";
       ReadOnlyPaths = [ "/var/lib/cresset-view/repository/current" "/srv/sync" ];
-      # The review store is the first thing this service writes. Narrow on purpose: the
-      # repository stays read-only above, so a defect in the review code cannot reach the
-      # thing being reviewed.
-      ReadWritePaths = [ "/var/lib/cresset-view" ];
+      # The review store and the approvals projection are the only things this service
+      # writes. Narrow on purpose: the repository stays read-only above, so a defect in the
+      # review code cannot reach the thing being reviewed.
+      ReadWritePaths = [ "/var/lib/cresset-view" "/var/lib/cresset-review" ];
       # /srv is a nofail Cloud Volume, so the viewer must not be held up by it: the sync panel
       # degrades on its own if the path is absent.
       RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];

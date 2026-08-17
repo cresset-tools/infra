@@ -116,6 +116,21 @@ interface PatchSet {
   current: boolean;
 }
 
+interface Approval {
+  change_id: string;
+  commit_id: string;
+  approved_by: string;
+  created_at: number;
+}
+
+interface ApprovalsResponse {
+  change_id: string;
+  approvals: Approval[];
+  /// Whether this instance actually gates pushes. False means approving records who read what
+  /// and nothing enforces it — worth saying rather than implying a gate that is not there.
+  gated: boolean;
+}
+
 interface ChangeDetail {
   operation_id: string;
   change_id: string;
@@ -260,6 +275,11 @@ let themePreference = readThemePreference();
 let reviewChangeId: string | null = null;
 let reviewPatchSet: string | null = null;
 let reviewThreads: Thread[] = [];
+let reviewApprovals: Approval[] = [];
+let reviewGated = false;
+/// Who this browser is, as the proxy sees it. Fetched once; the header never reaches the page,
+/// so the UI cannot tell "your" approval from anyone else's without asking.
+let reviewIdentity = '';
 /// Whether this instance can be written to. `--review-db` is optional, so a viewer can run with
 /// review read-only; the "+" must not be offered if a comment would be refused.
 let reviewWritable = false;
@@ -318,10 +338,26 @@ async function initialize() {
 
   revisionPan.addEventListener('input', applyGraphPan);
 
+  // Not fatal if it fails: the viewer is useful without knowing who is looking, and an empty
+  // identity simply means no approval is shown as yours.
+  reviewIdentity = await fetchJson<{ username: string }>('/api/identity')
+    .then((response) => response.username)
+    .catch(() => '');
+
   const first = await loadRevisionPage(true);
   if (first == null) return;
   operation.textContent = `operation ${short(first.operation_id)}`;
   headCount.textContent = `${first.head_count.toLocaleString()} heads`;
+
+  // A `?change=` link goes straight to the review queue with that change open. It is the
+  // destination hooks/update prints when it refuses a push, so it has to work from cold.
+  if (initialUrlState.change != null) {
+    currentMode = 'review';
+    syncModeButtons();
+    await loadReviewQueue(initialUrlState.change);
+    window.addEventListener('popstate', () => void restoreUrlState());
+    return;
+  }
 
   let initialRevision = initialUrlState.revision == null
     ? loadedRevisions.find((revision) => revision.working_copy) ?? loadedRevisions[0]
@@ -549,7 +585,7 @@ function defaultModeFor(revision: Revision): ViewMode {
 /// The queue reuses that panel rather than adding a fourth column: a change IS a revision
 /// here, so selecting one behaves like selecting a revision and the files and detail panes
 /// carry on working unchanged.
-async function loadReviewQueue() {
+async function loadReviewQueue(wanted: string | null = null) {
   panelTitle.textContent = 'Review';
   revisionSearch.closest('.revision-search')?.toggleAttribute('hidden', true);
   revisionPan.closest('.revision-pan')?.toggleAttribute('hidden', true);
@@ -601,9 +637,23 @@ async function loadReviewQueue() {
     button.addEventListener('click', () => void selectChange(change.change_id, button));
     revisionList.append(button);
   }
-  // Open the first change, so the screen is useful without a click.
-  const first = revisionList.querySelector<HTMLButtonElement>('.revision');
-  if (first != null) await selectChange(response.changes[0].change_id, first);
+  // Open a change without a click: the one the URL asked for, else the first. A `?change=`
+  // link is what a refused push prints, so it must land on that change and not on whatever
+  // happens to be at the top of the queue.
+  const asked = wanted == null
+    ? -1
+    : response.changes.findIndex((change) => change.change_id.startsWith(wanted));
+  const buttons = [...revisionList.querySelectorAll<HTMLButtonElement>('.revision')];
+  const index = asked === -1 ? 0 : asked;
+  if (buttons[index] != null) await selectChange(response.changes[index].change_id, buttons[index]);
+  if (wanted != null && asked === -1) {
+    // A change that is not open: landed already, abandoned, or a stale link. Say so, rather
+    // than quietly showing a different one and letting someone approve the wrong change.
+    const note = document.createElement('p');
+    note.className = 'revision-status';
+    note.textContent = `Change ${short(wanted)} is not open for review — it may have landed already.`;
+    revisionList.prepend(note);
+  }
 }
 
 /// Show one change: its patch sets, and the diff of whichever is selected.
@@ -629,7 +679,7 @@ async function selectChange(changeId: string, button: HTMLButtonElement | null, 
   // to arrive already carries its comments instead of appearing bare and then twitching.
   reviewChangeId = detail.change_id;
   reviewPatchSet = showing;
-  await loadThreads(detail.change_id);
+  await Promise.all([loadThreads(detail.change_id), loadApprovals(detail.change_id)]);
   renderChangeHeading(detail, showing);
 
   // The diff of the selected patch set, through the existing stream. Reading an OLD patch set
@@ -695,11 +745,63 @@ function renderChangeHeading(detail: ChangeDetail, showing: string) {
         ${sets.length > 1 && showing !== (sets.find((s) => s.current)?.commit_id ?? '')
           ? '<span class="patch-note">viewing a superseded version</span>' : ''}
       </div>`}
+    ${renderApprovalControl(showing)}
   `;
   for (const button of changeHeading.querySelectorAll<HTMLButtonElement>('[data-patch-set]')) {
     button.addEventListener('click', () => {
       void selectChange(detail.change_id, currentRevisionButton, button.dataset.patchSet);
     });
+  }
+  const approve = changeHeading.querySelector<HTMLButtonElement>('[data-approve]');
+  approve?.addEventListener('click', () => void toggleApproval(detail, showing, approve));
+}
+
+/// The approve control, describing the state of the patch set actually on screen.
+///
+/// Deliberately about `showing` rather than about "the change": an approval says someone read
+/// this exact text, and hooks/update matches on the commit id. Approving while looking at a
+/// superseded version approves that version and will not let the current one land -- so the
+/// control says which one it means, rather than leaving it to be discovered at push time.
+function renderApprovalControl(showing: string): string {
+  if (!reviewWritable) return '';
+  const here = reviewApprovals.filter((approval) => approval.commit_id === showing);
+  const elsewhere = reviewApprovals.length - here.length;
+  const mine = here.some((approval) => approval.approved_by === reviewIdentity);
+  return `
+    <div class="approval">
+      <button type="button" data-approve class="${mine ? 'withdraw' : ''}">
+        ${mine ? 'Withdraw approval' : 'Approve this patch set'}
+      </button>
+      <span class="approval-state ${here.length === 0 ? '' : 'approved'}">
+        ${here.length === 0
+          ? 'Not approved'
+          : `Approved by ${here.map((a) => escapeHtml(a.approved_by)).join(', ')}`}
+      </span>
+      ${elsewhere === 0 ? '' : `<span class="approval-note">${elsewhere} approval${elsewhere === 1 ? '' : 's'} of another patch set, which will not let this one land</span>`}
+      ${reviewGated ? '' : '<span class="approval-note">this instance records approvals but does not gate pushes</span>'}
+    </div>
+  `;
+}
+
+async function toggleApproval(detail: ChangeDetail, showing: string, button: HTMLButtonElement) {
+  const mine = reviewApprovals.some(
+    (approval) => approval.commit_id === showing && approval.approved_by === reviewIdentity,
+  );
+  button.disabled = true;
+  try {
+    const response = await postJson<ApprovalsResponse>(
+      `/api/changes/${encodeURIComponent(detail.change_id)}/approvals`,
+      { commit_id: showing, approved: !mine },
+    );
+    reviewApprovals = response.approvals;
+    reviewGated = response.gated;
+    renderChangeHeading(detail, showing);
+  } catch (error) {
+    button.disabled = false;
+    const message = document.createElement('p');
+    message.className = 'thread-error';
+    message.textContent = error instanceof Error ? error.message : String(error);
+    button.closest('.approval')?.append(message);
   }
 }
 
@@ -1063,10 +1165,25 @@ async function loadThreads(changeId: string) {
   annotationCache.clear();
 }
 
+async function loadApprovals(changeId: string) {
+  try {
+    const response = await fetchJson<ApprovalsResponse>(
+      `/api/changes/${encodeURIComponent(changeId)}/approvals`,
+    );
+    reviewApprovals = response.approvals;
+    reviewGated = response.gated;
+  } catch {
+    reviewApprovals = [];
+    reviewGated = false;
+  }
+}
+
 function forgetReviewThreads() {
   reviewChangeId = null;
   reviewPatchSet = null;
   reviewThreads = [];
+  reviewApprovals = [];
+  reviewGated = false;
   reviewWritable = false;
   draft = null;
   draftBody = '';
@@ -1561,9 +1678,16 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-function readUrlState(): { revision: string | null; path: string | null } {
+function readUrlState(): { revision: string | null; path: string | null; change: string | null } {
   const params = new URLSearchParams(location.search);
-  return { revision: params.get('revision'), path: params.get('path') };
+  // `change` is what a refused push links to. hooks/update prints
+  // `https://code.cresset.tools/?change=<id>` for every commit that has not been approved, so
+  // the message names the work AND the place to do something about it.
+  return {
+    revision: params.get('revision'),
+    path: params.get('path'),
+    change: params.get('change'),
+  };
 }
 
 function setViewUrl(revision: Revision, path: string | null, push: boolean) {

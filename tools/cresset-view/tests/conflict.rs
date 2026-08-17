@@ -751,6 +751,121 @@ fn an_anchor_survives_the_round_trip_and_replies_append() {
     assert_eq!(other.as_array().expect("array").len(), 0);
 }
 
+/// Approving publishes the file the push gate reads, and a new patch set is not approved by it.
+///
+/// This is the contract between the viewer and `hooks/update`. If the file stops being written,
+/// or is written with a short commit id, or an approval of patch set 1 is allowed to satisfy the
+/// gate for patch set 2, then either every push is refused or unreviewed code lands — and both
+/// failures show up at the moment someone is trying to ship something.
+#[test]
+fn approving_publishes_the_file_the_gate_reads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, commit) = review_repo(dir.path());
+
+    let viewer = dir.path().join("viewer");
+    let review_db = dir.path().join("review.db");
+    let approvals = dir.path().join("approved");
+    let server = Server::start_with(
+        &viewer,
+        &[
+            "--review-db",
+            review_db.to_str().unwrap(),
+            "--approvals-file",
+            approvals.to_str().unwrap(),
+        ],
+    );
+
+    // Written before anyone approves anything: the gate fails closed on a missing file, so an
+    // instance that has never had an approval must still produce an (empty) one.
+    let initial = std::fs::read_to_string(&approvals).expect("the file exists at startup");
+    assert!(
+        !initial.contains(&commit),
+        "nothing is approved yet: {initial}"
+    );
+
+    let (status, body) = server.post(
+        &format!("/api/changes/{change}/approvals"),
+        &format!(r#"{{"commit_id":"{commit}","approved":true}}"#),
+        &[],
+    );
+    assert_eq!(status, 200, "approving must succeed: {body}");
+    let body: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    assert_eq!(body["approvals"][0]["approved_by"], "test");
+    assert_eq!(
+        body["gated"], true,
+        "an instance with the file gates pushes"
+    );
+
+    let published = std::fs::read_to_string(&approvals).expect("approvals file");
+    assert!(
+        published
+            .lines()
+            .any(|line| line == format!("{change} {commit}")),
+        "the hook greps for the exact pair on its own line: {published}"
+    );
+
+    // A short id would be recorded and then never match `git rev-list`'s full ids, so the gate
+    // would refuse a push the reviewer believes they approved.
+    let (status, refused) = server.post(
+        &format!("/api/changes/{change}/approvals"),
+        r#"{"commit_id":"abc1234","approved":true}"#,
+        &[],
+    );
+    assert_eq!(status, 400, "a short commit id must be refused: {refused}");
+    assert!(refused.contains("40-character"), "and say why: {refused}");
+
+    // Withdrawing removes the line. An approval that could only be invalidated by pushing again
+    // would make people hesitate to approve at all.
+    let (status, _) = server.post(
+        &format!("/api/changes/{change}/approvals"),
+        &format!(r#"{{"commit_id":"{commit}","approved":false}}"#),
+        &[],
+    );
+    assert_eq!(status, 200);
+    let after = std::fs::read_to_string(&approvals).expect("approvals file");
+    assert!(
+        !after.contains(&commit),
+        "withdrawing must remove the line, or the gate keeps letting it through: {after}"
+    );
+
+    // And a cross-site approval is refused for the same reason a cross-site comment is: proxy
+    // header authentication means any tab in the reviewer's browser is an authenticated actor,
+    // and this button is the one that lets code reach 31 public repositories.
+    let (status, refused) = server.post(
+        &format!("/api/changes/{change}/approvals"),
+        &format!(r#"{{"commit_id":"{commit}","approved":true}}"#),
+        &[("sec-fetch-site", "cross-site")],
+    );
+    assert_eq!(
+        status, 400,
+        "a cross-site approval must be refused: {refused}"
+    );
+}
+
+/// An instance with no approvals file records who read what, and says it gates nothing.
+#[test]
+fn an_instance_without_the_gate_says_so() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, commit) = review_repo(dir.path());
+    let review_db = dir.path().join("review.db");
+    let server = Server::start_with(
+        &dir.path().join("viewer"),
+        &["--review-db", review_db.to_str().unwrap()],
+    );
+
+    let (status, body) = server.post(
+        &format!("/api/changes/{change}/approvals"),
+        &format!(r#"{{"commit_id":"{commit}","approved":true}}"#),
+        &[],
+    );
+    assert_eq!(status, 200, "approving still works: {body}");
+    let body: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    assert_eq!(
+        body["gated"], false,
+        "it must not imply an enforcement that is not there"
+    );
+}
+
 /// Without a review database the instance stays read-only, and says so.
 #[test]
 fn writing_without_a_review_database_explains_itself() {
