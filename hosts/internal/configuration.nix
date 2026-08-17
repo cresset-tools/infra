@@ -520,6 +520,35 @@ in
         '';
       };
 
+      # The forward-auth subrequest, as its own exact-match location.
+      #
+      # `proxy_pass_request_body off` is what makes a POST here take 60ms instead of 30
+      # SECONDS. Without it nginx forwards the client body into the auth subrequest and never
+      # consumes it on the main request, so after answering it lingering-closes -- reading and
+      # discarding client data for up to `lingering_time`, whose default is exactly 30s.
+      #
+      # Measured, and it reproduces without a session: POST with an empty body 0.06s, POST with
+      # a 33-byte body 30.06s, identically over HTTP/1.1 and HTTP/2 and regardless of
+      # Connection: close. In the access log it reads `request_time=30.010
+      # upstream_time=0.009` -- nine milliseconds of application, thirty seconds of nginx.
+      #
+      # This affects EVERY POST behind this forward-auth, not just cresset-view's approvals; it
+      # only surfaced now because nothing here had a write endpoint before. The empty
+      # Content-Length goes with it: the auth server must not be told to expect a body that is
+      # deliberately not being sent.
+      #
+      # Exact match (`=`) so it wins over the `/outpost.goauthentik.io` prefix above, which
+      # still serves the interactive sign-in endpoints and does need bodies.
+      locations."= /outpost.goauthentik.io/auth/nginx" = {
+        proxyPass = "http://127.0.0.1:9000";
+        extraConfig = ''
+          internal;
+          proxy_pass_request_body off;
+          proxy_set_header Content-Length "";
+          proxy_set_header X-Original-URL $scheme://$host$request_uri;
+        '';
+      };
+
       locations."@goauthentik_proxy_signin".extraConfig = ''
         internal;
         add_header Set-Cookie $auth_cookie;
