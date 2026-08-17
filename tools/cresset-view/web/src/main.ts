@@ -4,6 +4,7 @@ import {
   parseDiffFromFile,
   type CodeViewItem,
   type CodeViewOptions,
+  type DiffLineAnnotation,
   type FileDiffMetadata,
   type ThemeTypes,
 } from '@pierre/diffs';
@@ -19,6 +20,15 @@ import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/700.css';
 import './style.css';
 import { graphLaneX, layoutRevisionGraph, type GraphRow } from './graph';
+import { captureAnchor, type Confidence, type Side } from './anchor';
+import {
+  placeThreads,
+  placementNote,
+  unresolvedCount,
+  type FileSides,
+  type PlacedThread,
+  type Thread,
+} from './threads';
 
 interface Revision {
   change_id: string;
@@ -130,6 +140,20 @@ interface ConflictView {
 type ViewMode = 'browse' | 'changes' | 'review';
 type ThemePreference = 'auto' | 'light' | 'dark';
 
+/// What a `CodeView` annotation carries: an anchor, and the thread behind it once there is one.
+///
+/// A draft is an annotation too — the composer opens where the comment will land, so what you
+/// type is already in the place you are talking about — which is why `placed` is optional rather
+/// than this being a union of two shapes. @pierre/diffs' `OptionalMetadata<T>` distributes over
+/// a union, so a union here makes `metadata` unassignable at the call site.
+interface ThreadAnnotation {
+  path: string;
+  side: Side;
+  line: number;
+  /// Absent while the comment is still being written.
+  placed?: PlacedThread;
+}
+
 const app = document.querySelector<HTMLElement>('#app');
 if (app == null) throw new Error('missing app element');
 
@@ -198,8 +222,8 @@ const themeSelect = requiredElement<HTMLSelectElement>('#theme');
 const modeButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
 let tree: FileTree | null = null;
 let renderedFile: FileViewer | null = null;
-let codeView: CodeView | null = null;
-let diffItems: CodeViewItem[] = [];
+let codeView: CodeView<ThreadAnnotation> | null = null;
+let diffItems: CodeViewItem<ThreadAnnotation>[] = [];
 let loadedDiffPaths = new Set<string>();
 let currentRevision: Revision | null = null;
 let currentRevisionButton: HTMLButtonElement | null = null;
@@ -229,6 +253,36 @@ let fileGeneration = 0;
 let diffController: AbortController | null = null;
 let diffParser: DiffParser | null = null;
 let themePreference = readThemePreference();
+
+// --- Review threads -------------------------------------------------------------------------
+// Only populated while a change is open. Browse and Changes read arbitrary revisions, which have
+// no change under review and so no threads and no gutter affordance.
+let reviewChangeId: string | null = null;
+let reviewPatchSet: string | null = null;
+let reviewThreads: Thread[] = [];
+/// Whether this instance can be written to. `--review-db` is optional, so a viewer can run with
+/// review read-only; the "+" must not be offered if a comment would be refused.
+let reviewWritable = false;
+/// Both sides of every file loaded from the diff stream, kept because an anchor is captured and
+/// relocated against file CONTENT, and the parsed `FileDiffMetadata` has already thrown the
+/// original text away.
+const fileSides = new Map<string, FileSides>();
+/// `CodeView.updateItem` is a no-op unless `version` changes, so every rebuild of an item has to
+/// carry a higher number than the last one for that path.
+const itemVersions = new Map<string, number>();
+/// At most one composer is open. A second "+" click moves it rather than opening a second box —
+/// two half-written comments in one file is a way to lose one of them.
+/// Carries its own annotation object so its identity is stable while it is open — see
+/// `cachedAnnotation` for why that matters.
+let draft: { path: string; side: Side; line: number; annotation: ThreadAnnotation } | null = null;
+/// What has been typed but not sent, by draft key and by thread id. Virtualization unmounts a
+/// file that scrolls out of view and takes its DOM with it, so the text has to live out here.
+let draftBody = '';
+const replyBodies = new Map<number, string>();
+/// Annotation metadata is compared by identity to decide whether to re-render a card (see
+/// `areDiffLineAnnotationsEqual`), so the same placement must hand back the same object or every
+/// scroll rebuilds the DOM and drops focus mid-sentence.
+const annotationCache = new Map<string, ThreadAnnotation>();
 
 themeSelect.value = themePreference;
 applyTheme(themePreference);
@@ -569,6 +623,13 @@ async function selectChange(changeId: string, button: HTMLButtonElement | null, 
   const latest = detail.patch_sets.find((set) => set.current)?.commit_id ?? detail.current.commit_id;
   const showing = patchSet ?? latest;
   currentRevision = detail.current;
+
+  // Threads belong to the change, not to a patch set, so they are fetched once here and placed
+  // against whichever version is being read. Loading them before the diff means the first item
+  // to arrive already carries its comments instead of appearing bare and then twitching.
+  reviewChangeId = detail.change_id;
+  reviewPatchSet = showing;
+  await loadThreads(detail.change_id);
   renderChangeHeading(detail, showing);
 
   // The diff of the selected patch set, through the existing stream. Reading an OLD patch set
@@ -598,7 +659,8 @@ async function selectChange(changeId: string, button: HTMLButtonElement | null, 
       if (event.type === 'error') throw new Error(event.error);
       const fileDiff = await diffParser!.parse(event);
       if (generation !== selectionGeneration) return;
-      const item = codeViewItem(event.path, fileDiff, 1);
+      fileSides.set(event.path, { before: event.before, after: event.after });
+      const item = codeViewItem(event.path, fileDiff, nextVersion(event.path));
       diffItems[event.index] = item;
       loadedDiffPaths.add(event.path);
       codeView?.updateItem(item);
@@ -621,6 +683,7 @@ function renderChangeHeading(detail: ChangeDetail, showing: string) {
     <p>
       ${detail.bookmark == null ? '' : `on <code>${escapeHtml(detail.bookmark)}</code> · `}
       by ${escapeHtml(detail.current.author_name)}
+      ${reviewWritable ? ` · <span class="thread-count">${escapeHtml(threadCountLabel())}</span>` : ''}
     </p>
     ${sets.length === 0 ? '' : `
       <div class="patch-sets" role="group" aria-label="Patch sets">
@@ -699,6 +762,10 @@ async function selectRevision(revision: Revision, button: HTMLButtonElement | nu
 }
 
 async function loadRevision(revision: Revision, requestedPath: string | null = null) {
+  // Browse and Changes read a revision, not a change under review. Comments belong to a change,
+  // so leaving review mode has to put the gutter affordance away with them — offering "+" on a
+  // revision that is not being reviewed would open a composer with nowhere to post.
+  forgetReviewThreads();
   const generation = ++selectionGeneration;
   fileGeneration += 1;
   diffController?.abort();
@@ -925,7 +992,7 @@ function setupCodeView(paths: string[]) {
   codeView.setItems(diffItems);
 }
 
-function codeViewPlaceholder(path: string): CodeViewItem {
+function codeViewPlaceholder(path: string): CodeViewItem<ThreadAnnotation> {
   return {
     id: path,
     type: 'diff',
@@ -938,17 +1005,23 @@ function codeViewPlaceholder(path: string): CodeViewItem {
   };
 }
 
-function codeViewItem(path: string, fileDiff: FileDiffMetadata, version: number): CodeViewItem {
+function codeViewItem(
+  path: string,
+  fileDiff: FileDiffMetadata,
+  version: number,
+): CodeViewItem<ThreadAnnotation> {
   return {
     id: path,
     type: 'diff',
     fileDiff,
+    annotations: annotationsFor(path),
     version,
     collapsed: false,
   };
 }
 
-function codeViewOptions(): CodeViewOptions<undefined> {
+function codeViewOptions(): CodeViewOptions<ThreadAnnotation> {
+  const reviewing = reviewChangeId != null && reviewWritable;
   return {
     theme: { dark: 'pierre-dark', light: 'pierre-light' },
     themeType: pierreThemeType(),
@@ -956,7 +1029,334 @@ function codeViewOptions(): CodeViewOptions<undefined> {
     overflow: 'wrap',
     stickyHeaders: true,
     layout: { paddingTop: 22, paddingBottom: 22, gap: 18 },
+    renderAnnotation: (annotation) => renderAnnotation(annotation.metadata),
+    // The library's own hover "+" in the gutter. Only offered while a change is open and this
+    // instance can actually store what gets typed.
+    enableGutterUtility: reviewing,
+    onGutterUtilityClick: reviewing
+      ? (range, context) => openDraft(context.item.id, range)
+      : undefined,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Review threads.
+//
+// A thread is anchored to a change and to the text of a line, and is rendered against whichever
+// patch set is on screen — which may not be the one it was written against. threads.ts decides
+// where each one goes and how sure it is; everything here is presentation and writing.
+// ---------------------------------------------------------------------------
+
+async function loadThreads(changeId: string) {
+  try {
+    reviewThreads = await fetchJson<Thread[]>(`/api/changes/${encodeURIComponent(changeId)}/threads`);
+    reviewWritable = true;
+  } catch {
+    // An instance started without `--review-db` refuses to read threads for the same reason it
+    // refuses to write them. That is a configuration, not a fault: show the diff, offer nothing.
+    reviewThreads = [];
+    reviewWritable = false;
+  }
+  draft = null;
+  draftBody = '';
+  replyBodies.clear();
+  annotationCache.clear();
+}
+
+function forgetReviewThreads() {
+  reviewChangeId = null;
+  reviewPatchSet = null;
+  reviewThreads = [];
+  reviewWritable = false;
+  draft = null;
+  draftBody = '';
+  replyBodies.clear();
+  annotationCache.clear();
+}
+
+/// Every annotation on one file: its threads, placed, plus the composer if it is open here.
+function annotationsFor(path: string): DiffLineAnnotation<ThreadAnnotation>[] {
+  const annotations: DiffLineAnnotation<ThreadAnnotation>[] = [];
+  const sides = fileSides.get(path);
+  if (sides != null) {
+    for (const placed of placeThreads(reviewThreads, path, sides)) {
+      annotations.push({
+        side: placed.side,
+        lineNumber: placed.line,
+        metadata: cachedAnnotation(`thread:${placed.thread.id}:${placed.line}`, {
+          path,
+          side: placed.side,
+          line: placed.line,
+          placed,
+        }),
+      });
+    }
+  }
+  if (draft != null && draft.path === path) {
+    annotations.push({ side: draft.side, lineNumber: draft.line, metadata: draft.annotation });
+  }
+  return annotations;
+}
+
+/// Hand back the same metadata object for the same annotation.
+///
+/// @pierre/diffs compares metadata by identity to decide whether a card needs re-rendering, so
+/// a fresh object every render means a rebuilt DOM on every scroll — and a reply box that loses
+/// focus and its selection while being typed into.
+function cachedAnnotation(key: string, value: ThreadAnnotation): ThreadAnnotation {
+  const existing = annotationCache.get(key);
+  if (existing != null) return existing;
+  annotationCache.set(key, value);
+  return value;
+}
+
+/// Drop a thread's cached metadata so its card is rebuilt with what the server just returned.
+function invalidateThread(threadId: number) {
+  for (const key of [...annotationCache.keys()]) {
+    if (key.startsWith(`thread:${threadId}:`)) annotationCache.delete(key);
+  }
+}
+
+function nextVersion(path: string): number {
+  const version = (itemVersions.get(path) ?? 0) + 1;
+  itemVersions.set(path, version);
+  return version;
+}
+
+/// Re-render one file's annotations. Bumping the version is what makes `updateItem` do anything.
+function refreshAnnotations(path: string) {
+  const index = diffItems.findIndex((item) => item.id === path);
+  if (index === -1) return;
+  const item = diffItems[index];
+  if (item.type !== 'diff') return;
+  const next: CodeViewItem<ThreadAnnotation> = {
+    ...item,
+    annotations: annotationsFor(path),
+    version: nextVersion(path),
+  };
+  diffItems[index] = next;
+  codeView?.updateItem(next);
+}
+
+/// Open the composer where the "+" was clicked.
+///
+/// A drag over the gutter selects a range; a comment is anchored to a single line, so the start
+/// is what counts. Anchoring to the first line of a selection is what Gerrit does too.
+function openDraft(path: string, range: { start: number; side?: Side }) {
+  const previous = draft?.path;
+  const side = range.side ?? 'additions';
+  draft = { path, side, line: range.start, annotation: { path, side, line: range.start } };
+  draftBody = '';
+  if (previous != null && previous !== path) refreshAnnotations(previous);
+  refreshAnnotations(path);
+}
+
+function closeDraft() {
+  const path = draft?.path;
+  draft = null;
+  draftBody = '';
+  if (path != null) refreshAnnotations(path);
+}
+
+function renderAnnotation(metadata: ThreadAnnotation | undefined): HTMLElement | undefined {
+  if (metadata == null) return undefined;
+  return metadata.placed == null
+    ? renderComposer(metadata)
+    : renderThreadCard(metadata.placed, metadata.path);
+}
+
+function renderThreadCard(placed: PlacedThread, path: string): HTMLElement {
+  const { thread } = placed;
+  const card = document.createElement('div');
+  card.className = `review-thread${thread.resolved ? ' resolved' : ''} ${placed.confidence}`;
+  const note = placementNote(placed);
+  card.innerHTML = `
+    <div class="thread-meta">
+      <span class="thread-state">${thread.resolved ? 'Resolved' : 'Open'}</span>
+      ${note == null ? '' : `<span class="thread-note">${escapeHtml(note)}</span>`}
+    </div>
+    <ol class="thread-comments">
+      ${thread.comments.map((comment) => `
+        <li>
+          <div class="comment-meta">
+            <strong>${escapeHtml(comment.author)}</strong>
+            <time>${escapeHtml(formatUnix(comment.created_at))}</time>
+            ${comment.patch_set_commit_id === reviewPatchSet ? '' :
+              `<span class="comment-elsewhere" title="${escapeHtml(comment.patch_set_commit_id)}">on another patch set</span>`}
+          </div>
+          <p>${escapeHtml(comment.body)}</p>
+        </li>`).join('')}
+    </ol>
+    ${!reviewWritable ? '' : `
+      <form class="thread-reply">
+        <textarea rows="2" placeholder="Reply" aria-label="Reply to this thread"></textarea>
+        <div class="thread-actions">
+          <button type="submit">Reply</button>
+          <button type="button" data-resolve>${thread.resolved ? 'Reopen' : 'Resolve'}</button>
+        </div>
+      </form>`}
+  `;
+  if (!reviewWritable) return card;
+
+  const form = card.querySelector<HTMLFormElement>('.thread-reply')!;
+  const textarea = form.querySelector('textarea')!;
+  // Restored rather than assumed empty: scrolling this file out of view unmounts the card, and
+  // an unsent reply that evaporates because you looked at something else is a lost remark.
+  textarea.value = replyBodies.get(thread.id) ?? '';
+  textarea.addEventListener('input', () => replyBodies.set(thread.id, textarea.value));
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void submitReply(thread.id, path, textarea.value, form);
+  });
+  form.querySelector<HTMLButtonElement>('[data-resolve]')!.addEventListener('click', () => {
+    void submitResolve(thread.id, path, !thread.resolved, form);
+  });
+  return card;
+}
+
+function renderComposer(draftAnnotation: { path: string; side: Side; line: number }): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'review-thread composing';
+  card.innerHTML = `
+    <div class="thread-meta">
+      <span class="thread-state">New comment</span>
+      <span class="thread-note">on the ${draftAnnotation.side === 'additions' ? 'new' : 'old'} line ${draftAnnotation.line}</span>
+    </div>
+    <form class="thread-reply">
+      <textarea rows="3" placeholder="Leave a comment" aria-label="New comment"></textarea>
+      <div class="thread-actions">
+        <button type="submit">Comment</button>
+        <button type="button" data-cancel>Cancel</button>
+      </div>
+    </form>
+  `;
+  const form = card.querySelector<HTMLFormElement>('.thread-reply')!;
+  const textarea = form.querySelector('textarea')!;
+  textarea.value = draftBody;
+  textarea.addEventListener('input', () => { draftBody = textarea.value; });
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void submitThread(textarea.value, form);
+  });
+  form.querySelector<HTMLButtonElement>('[data-cancel]')!.addEventListener('click', closeDraft);
+  // Deferred: the card is appended to the document by the caller, and focusing a node that is
+  // not in the tree yet does nothing.
+  queueMicrotask(() => textarea.focus());
+  return card;
+}
+
+async function submitThread(body: string, form: HTMLFormElement) {
+  if (draft == null || reviewChangeId == null || reviewPatchSet == null) return;
+  if (body.trim() === '') return;
+  const sides = fileSides.get(draft.path);
+  const contents = sides == null ? null : (draft.side === 'additions' ? sides.after : sides.before);
+  if (contents == null) {
+    showFormError(form, 'this line is not in the version being read');
+    return;
+  }
+  // Captured here, in the browser, from the text the reader is looking at. The server stores the
+  // fingerprint without knowing what it means, which is what keeps relocation out of Rust.
+  const anchor = captureAnchor(draft.path, draft.side, contents, draft.line);
+  const path = draft.path;
+  await withBusyForm(form, async () => {
+    const thread = await postJson<Thread>(
+      `/api/changes/${encodeURIComponent(reviewChangeId!)}/threads`,
+      {
+        path: anchor.path,
+        side: anchor.side,
+        line: anchor.line,
+        fingerprint: anchor.fingerprint,
+        context: JSON.stringify(anchor.context),
+        body,
+        patch_set_commit_id: reviewPatchSet,
+      },
+    );
+    reviewThreads = [...reviewThreads, thread];
+    draft = null;
+    draftBody = '';
+    refreshAnnotations(path);
+    updateThreadCount();
+  });
+}
+
+async function submitReply(threadId: number, path: string, body: string, form: HTMLFormElement) {
+  if (body.trim() === '' || reviewPatchSet == null) return;
+  await withBusyForm(form, async () => {
+    const updated = await postJson<Thread>(`/api/threads/${threadId}/comments`, {
+      body,
+      patch_set_commit_id: reviewPatchSet,
+    });
+    replaceThread(updated);
+    replyBodies.delete(threadId);
+    refreshAnnotations(path);
+  });
+}
+
+async function submitResolve(threadId: number, path: string, resolved: boolean, form: HTMLFormElement) {
+  await withBusyForm(form, async () => {
+    const updated = await postJson<Thread>(`/api/threads/${threadId}/resolve`, { resolved });
+    replaceThread(updated);
+    refreshAnnotations(path);
+    updateThreadCount();
+  });
+}
+
+function replaceThread(updated: Thread) {
+  reviewThreads = reviewThreads.map((thread) => (thread.id === updated.id ? updated : thread));
+  invalidateThread(updated.id);
+}
+
+/// Run a form submission with its controls disabled, and surface a failure in the form itself.
+///
+/// A write that fails silently is the worst outcome here: the comment looks sent, and the person
+/// it was addressed to never sees it.
+async function withBusyForm(form: HTMLFormElement, body: () => Promise<void>) {
+  const controls = [...form.querySelectorAll<HTMLButtonElement | HTMLTextAreaElement>('button, textarea')];
+  for (const control of controls) control.disabled = true;
+  form.querySelector('.thread-error')?.remove();
+  try {
+    await body();
+  } catch (error) {
+    showFormError(form, error instanceof Error ? error.message : String(error));
+  } finally {
+    for (const control of controls) control.disabled = false;
+  }
+}
+
+function showFormError(form: HTMLFormElement, message: string) {
+  form.querySelector('.thread-error')?.remove();
+  const paragraph = document.createElement('p');
+  paragraph.className = 'thread-error';
+  paragraph.textContent = message;
+  form.append(paragraph);
+}
+
+/// Keep the count in the change heading honest as threads are opened and resolved.
+function updateThreadCount() {
+  const badge = changeHeading.querySelector('.thread-count');
+  if (badge == null) return;
+  badge.textContent = threadCountLabel();
+}
+
+function threadCountLabel(): string {
+  if (reviewThreads.length === 0) return 'no comments';
+  const open = unresolvedCount(reviewThreads);
+  const total = `${reviewThreads.length} comment thread${reviewThreads.length === 1 ? '' : 's'}`;
+  return open === 0 ? `${total}, all resolved` : `${total}, ${open} open`;
+}
+
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await readError(response));
+  return response.json() as Promise<T>;
+}
+
+function formatUnix(seconds: number): string {
+  return formatDateTime(new Date(seconds * 1000).toISOString());
 }
 
 function cleanContentRenderers() {
@@ -966,6 +1366,10 @@ function cleanContentRenderers() {
   codeView = null;
   diffItems = [];
   loadedDiffPaths.clear();
+  // Both are keyed by path and describe the items just thrown away. The threads themselves are
+  // not cleared: they belong to the change, and switching patch sets re-places the same ones.
+  fileSides.clear();
+  itemVersions.clear();
 }
 
 class DiffParser {

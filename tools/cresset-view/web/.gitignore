@@ -1,2 +1,3 @@
-.test-graph.mjs
-.test-anchor.mjs
+# One bundle per suite, produced by `npm test`. Globbed rather than listed: the runner
+# loops over the suites, so a new one must not need a second edit here to stay untracked.
+.test-*.mjs

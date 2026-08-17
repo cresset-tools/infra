@@ -275,3 +275,69 @@ aside h2 strong { color: var(--muted); font: 500 10px/1.4 var(--mono); letter-sp
 .patch-sets button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .patch-note { color: var(--warning-text); background: var(--warning-bg); padding: 2px 8px; border-radius: 5px; font-size: 10px; }
 .signals em.revised { color: var(--accent); border-color: var(--accent); }
+
+/* Review threads.
+   Rendered into the diff itself, on the line they are about, so the comment and the code it
+   concerns are read together. Styled as an inset panel with a heavy left rule: unmistakably not
+   code, without pulling the eye away from the diff it interrupts.
+
+   The annotation wrapper is @pierre/diffs' own node, in the light DOM, so these rules reach it.
+   Everything here is scoped under .review-thread rather than the wrapper, because the wrapper
+   also carries the library's layout and should keep it. */
+.review-thread {
+  margin: 6px 0 6px 12px;
+  padding: 10px 13px;
+  display: grid;
+  gap: 9px;
+  max-width: 80ch;
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--accent);
+  background: var(--panel-bg);
+  font-family: var(--sans);
+}
+.review-thread.resolved { border-left-color: var(--muted); opacity: .72; }
+/* A relocated or lost anchor is the one thing the reader must not miss: the comment is being
+   shown somewhere other than where it was written. */
+.review-thread.moved, .review-thread.stale { border-left-color: var(--attention); }
+.review-thread.composing { border-left-color: var(--accent); border-color: var(--accent); }
+
+.thread-meta { display: flex; gap: 9px; align-items: baseline; flex-wrap: wrap; }
+.thread-state { font: 500 9px/1.4 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.review-thread.resolved .thread-state { color: var(--muted); }
+.thread-note { color: var(--warning-text); background: var(--warning-bg); padding: 2px 7px; font-size: 10px; }
+
+.thread-comments { margin: 0; padding: 0; list-style: none; display: grid; gap: 9px; }
+.thread-comments > li { display: grid; gap: 3px; }
+.thread-comments > li + li { padding-top: 9px; border-top: 1px solid var(--border-soft); }
+.comment-meta { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+.comment-meta strong { color: var(--text); font-size: 12px; font-weight: 600; }
+.comment-elsewhere { font-style: italic; }
+.thread-comments p { margin: 0; font: 13px/1.55 var(--sans); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.thread-reply { display: grid; gap: 7px; }
+.thread-reply textarea {
+  width: 100%;
+  padding: 7px 9px;
+  font: 13px/1.5 var(--sans);
+  color: var(--text);
+  background: var(--page-bg);
+  border: 1px solid var(--border-soft);
+  resize: vertical;
+}
+.thread-reply textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+.thread-actions { display: flex; gap: 7px; }
+.thread-actions button {
+  padding: 4px 11px;
+  font: 500 11px/1.4 var(--sans);
+  color: var(--text);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.thread-actions button[type="submit"] { color: var(--tag-text); background: var(--tag-bg); border-color: var(--tag-bg); }
+.thread-actions button:hover:not(:disabled) { border-color: var(--accent); }
+.thread-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-actions button:disabled { opacity: .5; cursor: progress; }
+.thread-error { margin: 0; color: var(--warning-text); background: var(--warning-bg); padding: 5px 8px; font-size: 11px; }
+
+.thread-count { color: var(--accent); }

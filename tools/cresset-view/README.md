@@ -1,11 +1,20 @@
 # Cresset View
 
-Read-only, jj-native web viewer for the Cresset monorepo. The service reads
-changes, exact commit versions, bookmarks, trees, and conflicts through
-`jj-lib`. Its public API and interface intentionally contain no Git concepts.
+A jj-native web viewer for the Cresset monorepo. The service reads changes,
+exact commit versions, bookmarks, trees, and conflicts through `jj-lib`. Its
+public API and interface intentionally contain no Git concepts.
+
+**The repository is read-only; review is not.** Nothing here ever writes to the
+repository — it does not snapshot the working copy, create commits, or move
+bookmarks. Code review comments are the one thing the service writes, and they
+go to a separate SQLite database given by `--review-db`, never into git. An
+instance started without that flag serves the review queue and its diffs and
+refuses writes with an explanation.
 
 Authentication is not implemented in the application. Production deployment
-binds it to loopback behind nginx and Authentik forward-auth.
+binds it to loopback behind nginx and Authentik forward-auth. Because that means
+every request from the reviewer's browser is authenticated, writes additionally
+refuse an explicit cross-site `Sec-Fetch-Site`.
 
 ## Development
 
@@ -15,7 +24,7 @@ Build the frontend, then run the service against a jj workspace:
 cd web
 npm install
 npm run build
-npm test          # revision graph layout checks; also run by the Nix build
+npm test          # graph layout, comment anchoring, thread placement; also run by the Nix build
 cd ..
 cargo run -- --repository /home/jelle/cresset --dev-identity you
 ```
@@ -29,6 +38,11 @@ on a loopback listener — with anything else the server refuses to start.
 `node:test`, and `node:assert` would pull `@types/node` into the app's typecheck. It runs
 in the Nix sandbox too (`package.nix`, `checkPhase`), so a broken layout fails the build
 rather than only the laptop it was written on.
+
+Comment anchoring lives in the browser (`web/src/anchor.ts`, `web/src/threads.ts`) rather
+than the server. A comment is placed by searching the patch set being read for the line it
+was written against, so the code doing the searching should be where the file content
+already is — and the store can then keep the anchor as opaque text it never interprets.
 
 Open `http://127.0.0.1:8080`. The viewer refuses repositories with divergent
 operation heads instead of reconciling them and never snapshots the working

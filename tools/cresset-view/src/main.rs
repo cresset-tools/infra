@@ -52,16 +52,16 @@ struct Args {
     #[arg(long, env = "CRESSET_VIEW_LISTEN", default_value = "127.0.0.1:8080")]
     listen: String,
 
-    /// The cresset-sync checkpoint database, read read-only to surface synchronization state.
-    ///
-    /// Optional on purpose. cresset-view is a repository viewer first; the worker may not be
-    /// deployed, may not have run yet, or may be on another host. Its absence removes a panel,
-    /// it does not break the service.
     /// Where review threads are stored. Absent means review is read-only: the queue and patch
     /// sets still work, and writing returns a clear error rather than silently discarding.
     #[arg(long, env = "CRESSET_VIEW_REVIEW_DB")]
     review_db: Option<PathBuf>,
 
+    /// The cresset-sync checkpoint database, read read-only to surface synchronization state.
+    ///
+    /// Optional on purpose. cresset-view is a repository viewer first; the worker may not be
+    /// deployed, may not have run yet, or may be on another host. Its absence removes a panel,
+    /// it does not break the service.
     #[arg(long, env = "CRESSET_VIEW_SYNC_DB")]
     sync_db: Option<PathBuf>,
 

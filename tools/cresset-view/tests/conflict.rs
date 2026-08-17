@@ -686,6 +686,71 @@ fn a_thread_records_its_author_and_refuses_cross_site_writes() {
     assert_eq!(listed[0]["resolved"], true);
 }
 
+/// The anchor makes the round trip untouched, and a reply lands on the thread it answers.
+///
+/// The browser relocates comments using `fingerprint` and `context` (see web/src/threads.ts), so
+/// the server storing them verbatim is load-bearing: anything that normalised, re-encoded, or
+/// parsed-and-reserialised the context would move comments onto wrong lines, which is exactly
+/// the failure the anchoring work exists to prevent.
+#[test]
+fn an_anchor_survives_the_round_trip_and_replies_append() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, commit) = review_repo(dir.path());
+
+    let viewer = dir.path().join("viewer");
+    let review_db = dir.path().join("review.db");
+    let server = Server::start_with(&viewer, &["--review-db", review_db.to_str().unwrap()]);
+
+    // Deliberately awkward: leading whitespace that matters, a quote, a backslash, and a tab.
+    // Indentation is part of a line's identity, so a store that trimmed would relocate a comment
+    // into a different scope.
+    let context = r#"["  fn a() {","\tlet x = \"y\";","","  }"]"#;
+    let fingerprint = "    if lane == -1 { lane = claim(); }";
+    let body = format!(
+        r#"{{"path":"g.txt","side":"deletions","line":42,
+            "fingerprint":{fingerprint:?},"context":{context:?},
+            "body":"why claim here?","patch_set_commit_id":"{commit}"}}"#
+    );
+    let (status, created) = server.post(&format!("/api/changes/{change}/threads"), &body, &[]);
+    assert_eq!(status, 200, "creating a thread must succeed: {created}");
+    let created: serde_json::Value = serde_json::from_str(&created).expect("valid json");
+    let thread_id = created["id"].as_i64().expect("an id");
+
+    assert_eq!(created["fingerprint"], fingerprint, "the line, verbatim");
+    assert_eq!(created["context"], context, "the context, verbatim");
+    assert_eq!(created["line"], 42);
+    assert_eq!(created["side"], "deletions");
+    assert_eq!(created["resolved"], false, "a new thread is open");
+
+    let (status, replied) = server.post(
+        &format!("/api/threads/{thread_id}/comments"),
+        &format!(r#"{{"body":"because the lane is free","patch_set_commit_id":"{commit}"}}"#),
+        &[],
+    );
+    assert_eq!(status, 200, "replying must succeed: {replied}");
+    let replied: serde_json::Value = serde_json::from_str(&replied).expect("valid json");
+    let comments = replied["comments"].as_array().expect("comments");
+    assert_eq!(comments.len(), 2, "the reply appends rather than replacing");
+    assert_eq!(comments[0]["body"], "why claim here?");
+    assert_eq!(comments[1]["body"], "because the lane is free");
+
+    // An empty comment is refused: a thread with nothing in it is an anchor nobody can answer.
+    let (status, refused) = server.post(
+        &format!("/api/threads/{thread_id}/comments"),
+        &format!(r#"{{"body":"   ","patch_set_commit_id":"{commit}"}}"#),
+        &[],
+    );
+    assert_eq!(status, 400, "an empty reply must be refused: {refused}");
+
+    // Threads are scoped to their change. The queue shows several at once, so a leak here would
+    // hang one change's comments off another's diff.
+    let other = server
+        .get("/api/changes/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/threads")
+        .expect("threads listed");
+    let other: serde_json::Value = serde_json::from_str(&other).expect("valid json");
+    assert_eq!(other.as_array().expect("array").len(), 0);
+}
+
 /// Without a review database the instance stays read-only, and says so.
 #[test]
 fn writing_without_a_review_database_explains_itself() {
