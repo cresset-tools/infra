@@ -58,6 +58,23 @@ struct Args {
     #[arg(long, env = "CRESSET_VIEW_REVIEW_DB")]
     review_db: Option<PathBuf>,
 
+    /// Where to push a merge, e.g. `git@localhost:cresset.git`.
+    ///
+    /// Absent means the Merge button is not offered: reviewing still works and landing is done
+    /// from a terminal. Present, this service can push to the canonical repository — and ONLY
+    /// push, over ssh as an ordinary client, so the same `update` hook decides whether the push
+    /// is allowed. It has no filesystem access to that repository.
+    #[arg(long, env = "CRESSET_VIEW_MERGE_REMOTE")]
+    merge_remote: Option<String>,
+
+    /// The private key for `--merge-remote`. Required with it, useless without it.
+    #[arg(long, env = "CRESSET_VIEW_MERGE_SSH_KEY")]
+    merge_ssh_key: Option<PathBuf>,
+
+    /// Where to remember the merge remote's host key.
+    #[arg(long, default_value = "/var/lib/cresset-view/known_hosts")]
+    known_hosts: PathBuf,
+
     /// Where to project approvals for the canonical repository's push gate to read.
     ///
     /// Optional, and absent on any instance that is not the one beside the canonical repo. See
@@ -93,6 +110,18 @@ struct AppState {
     sync_db: Option<Arc<PathBuf>>,
     review_db: Option<Arc<PathBuf>>,
     approvals_file: Option<Arc<PathBuf>>,
+    merge: Option<Arc<MergeConfig>>,
+}
+
+/// What is needed to land a stack. Both halves or neither: a remote with no key cannot
+/// authenticate, and a key with no remote has nowhere to go.
+struct MergeConfig {
+    remote: String,
+    ssh_key: PathBuf,
+    /// Learned on first connect and kept, rather than disabling host key checking outright.
+    /// The remote is the loopback address of this same machine, so the exposure is a host that
+    /// already runs this service; recording the key still catches a later change.
+    known_hosts: PathBuf,
 }
 
 #[derive(Debug)]
@@ -167,17 +196,31 @@ struct ChangeSummary {
     description: String,
     author_name: String,
     authored_at: String,
-    /// The review bookmark carrying it. A stack puts several changes on one bookmark.
-    bookmark: String,
     /// How many versions have been pushed. 1 means it has not been revised yet.
     patch_sets: usize,
     has_conflict: bool,
 }
 
+/// One review bookmark and the changes it carries, which is Gerrit's relation chain.
+///
+/// Grouped rather than flattened because landing is a property of the STACK, not of a change:
+/// advancing main to the tip lands everything beneath it, so the reader has to see what else
+/// comes along. The previous flat list also mislabelled mid-stack commits — a commit partway up
+/// carries no bookmark of its own, and the fallback picked an arbitrary one, so with two review
+/// bookmarks open a change could be shown under the wrong one.
+#[derive(Serialize)]
+struct Stack {
+    bookmark: String,
+    /// The commit landing this stack would move main to.
+    tip: String,
+    /// Oldest first: the order they would land in, and the order the gate reports them in.
+    changes: Vec<ChangeSummary>,
+}
+
 #[derive(Serialize)]
 struct ChangesResponse {
     operation_id: String,
-    changes: Vec<ChangeSummary>,
+    stacks: Vec<Stack>,
 }
 
 #[derive(Serialize)]
@@ -433,6 +476,15 @@ async fn main() -> Result<()> {
         sync_db: args.sync_db.map(Arc::new),
         review_db: args.review_db.map(Arc::new),
         approvals_file: args.approvals_file.map(Arc::new),
+        merge: match (args.merge_remote, args.merge_ssh_key) {
+            (Some(remote), Some(ssh_key)) => Some(Arc::new(MergeConfig {
+                remote,
+                ssh_key,
+                known_hosts: args.known_hosts,
+            })),
+            (None, None) => None,
+            _ => bail!("--merge-remote and --merge-ssh-key must be given together"),
+        },
     };
     // Regenerate before serving. The file is a projection of the database, and the push gate
     // fails closed on a missing one — so a file lost to a redeployed state directory would
@@ -463,6 +515,8 @@ async fn main() -> Result<()> {
             "/api/changes/{id}/approvals",
             get(list_approvals).post(set_approval),
         )
+        .route("/api/approvals", get(all_approvals))
+        .route("/api/merge", post(merge))
         .route("/api/sync", get(sync_status))
         .route("/api/revisions/{id}/tree", get(tree))
         .route("/api/revisions/{id}/file", get(file))
@@ -778,15 +832,21 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
         let repo = loaded.repo.as_ref();
         let view = repo.view();
 
-        // Review bookmarks and the commits they carry.
-        let mut heads = Vec::new();
-        let mut bookmark_of: std::collections::HashMap<CommitId, String> =
-            std::collections::HashMap::new();
-        // Local AND remote bookmarks. The viewer's repository only ever fetches, so a review
-        // bookmark exists there as `review/x@origin` and never locally — reading only local
-        // bookmarks returned an empty queue against a real repository.
+        // Every review bookmark and the commit it points at. Local AND remote: the viewer's
+        // repository only ever fetches, so a review bookmark exists there as `review/x@origin`
+        // and never locally — reading only local bookmarks returned an empty queue against a
+        // real repository.
+        let mut tips: Vec<(String, CommitId)> = Vec::new();
+        let mut landed = Vec::new();
         for (name, targets) in view.bookmarks() {
             let name = name.as_str().to_owned();
+            if name == "main" {
+                landed.extend(targets.local_target.added_ids().cloned());
+                for (_, remote) in &targets.remote_refs {
+                    landed.extend(remote.target.added_ids().cloned());
+                }
+                continue;
+            }
             if !name.starts_with("review/") {
                 continue;
             }
@@ -797,66 +857,60 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
                     .flat_map(|(_, r)| r.target.added_ids()),
             );
             for id in ids {
-                bookmark_of
-                    .entry(id.clone())
-                    .or_insert_with(|| name.clone());
-                heads.push(id.clone());
-            }
-        }
-        if heads.is_empty() {
-            return Ok(ChangesResponse {
-                operation_id: repo.op_id().hex(),
-                changes: Vec::new(),
-            });
-        }
-
-        // Everything reachable from a review bookmark and NOT from main. A stack of five
-        // commits on one bookmark is five changes, which is what Gerrit calls a relation chain.
-        let mut landed = Vec::new();
-        for (name, targets) in view.bookmarks() {
-            if name.as_str() == "main" {
-                landed.extend(targets.local_target.added_ids().cloned());
-                for (_, remote) in &targets.remote_refs {
-                    landed.extend(remote.target.added_ids().cloned());
+                if !tips.iter().any(|(_, existing)| existing == id) {
+                    tips.push((name.clone(), id.clone()));
                 }
             }
         }
-        let open = RevsetExpression::commits(heads)
-            .ancestors()
-            .minus(&RevsetExpression::commits(landed).ancestors());
-        let commits = open
-            .evaluate(repo)?
-            .stream()
-            .commits(repo.store())
-            .try_collect::<Vec<_>>()
-            .await?;
 
-        let mut changes = Vec::new();
-        for commit in commits {
-            let change_id = commit.change_id().reverse_hex();
-            let patch_sets = read_patch_sets(repo, &change_id)?.len();
-            let bookmark = bookmark_of
-                .get(commit.id())
-                .cloned()
-                // A commit partway up a stack carries no bookmark of its own; name the one
-                // whose tip it is beneath rather than showing nothing.
-                .or_else(|| bookmark_of.values().next().cloned())
-                .unwrap_or_default();
-            changes.push(ChangeSummary {
-                change_id,
-                commit_id: commit.id().hex(),
-                description: commit.description().to_owned(),
-                author_name: commit.author().name.clone(),
-                authored_at: commit.author().timestamp.to_datetime()?.to_rfc3339(),
+        // One revset per bookmark rather than one for all of them. Grouping after the fact
+        // cannot say which stack a mid-stack commit belongs to, because the commit itself
+        // carries no bookmark — the answer is which tip it is an ancestor of.
+        let landed = RevsetExpression::commits(landed).ancestors();
+        let mut stacks = Vec::new();
+        for (bookmark, tip) in tips {
+            let open = RevsetExpression::commits(vec![tip.clone()])
+                .ancestors()
+                .minus(&landed);
+            let commits = open
+                .evaluate(repo)?
+                .stream()
+                .commits(repo.store())
+                .try_collect::<Vec<_>>()
+                .await?;
+
+            let mut changes = Vec::new();
+            for commit in commits {
+                let change_id = commit.change_id().reverse_hex();
+                let patch_sets = read_patch_sets(repo, &change_id)?.len();
+                changes.push(ChangeSummary {
+                    change_id,
+                    commit_id: commit.id().hex(),
+                    description: commit.description().to_owned(),
+                    author_name: commit.author().name.clone(),
+                    authored_at: commit.author().timestamp.to_datetime()?.to_rfc3339(),
+                    patch_sets,
+                    has_conflict: commit.has_conflict(),
+                });
+            }
+            // The revset streams newest first; landing order is the opposite, and the gate
+            // lists unapproved commits oldest first too.
+            changes.reverse();
+            if changes.is_empty() {
+                // The bookmark has landed and not yet been deleted. Nothing to review.
+                continue;
+            }
+            stacks.push(Stack {
                 bookmark,
-                patch_sets,
-                has_conflict: commit.has_conflict(),
+                tip: tip.hex(),
+                changes,
             });
         }
+        stacks.sort_by(|a, b| a.bookmark.cmp(&b.bookmark));
 
         Ok(ChangesResponse {
             operation_id: repo.op_id().hex(),
-            changes,
+            stacks,
         })
     })
     .await?;
@@ -1022,6 +1076,9 @@ async fn resolve_thread(
 #[derive(Serialize)]
 struct IdentityResponse {
     username: String,
+    /// Whether this instance can land a stack. The UI hides Merge when it cannot, rather than
+    /// offering a button whose only possible answer is that the button does not work here.
+    can_merge: bool,
 }
 
 /// Who the proxy says the caller is.
@@ -1030,8 +1087,14 @@ struct IdentityResponse {
 /// cannot know it any other way: the header is added by nginx and never reaches the page.
 /// Read-only and derived entirely from the request, so it says nothing a caller did not already
 /// prove by getting this far.
-async fn identity(Extension(who): Extension<Identity>) -> Json<IdentityResponse> {
-    Json(IdentityResponse { username: who.0 })
+async fn identity(
+    State(state): State<AppState>,
+    Extension(who): Extension<Identity>,
+) -> Json<IdentityResponse> {
+    Json(IdentityResponse {
+        username: who.0,
+        can_merge: state.merge.is_some(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -1100,6 +1163,116 @@ async fn set_approval(
         change_id,
         gated: state.approvals_file.is_some(),
     }))
+}
+
+/// Every approval on the instance, for colouring the queue without one request per change.
+async fn all_approvals(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<review::ApprovalRow>>, AppError> {
+    let db = open_review(&state)?;
+    Ok(Json(db.all_approvals()?))
+}
+
+#[derive(Deserialize)]
+struct MergeBody {
+    /// The review bookmark being landed. Carried for the message, not for the decision.
+    bookmark: String,
+    /// The exact commit main should move to. Named by the caller rather than re-read here, so
+    /// a stack that gained a patch set between rendering the page and pressing the button
+    /// lands what was on screen or nothing — never something unread.
+    tip: String,
+}
+
+#[derive(Serialize)]
+struct MergeResponse {
+    bookmark: String,
+    tip: String,
+    /// git's own output. On success this is the ref update; on failure it carries the update
+    /// hook's refusal, which names each unapproved change and where to review it.
+    output: String,
+}
+
+/// Land a stack by pushing its tip to the canonical repository's main.
+///
+/// Deliberately a plain `git push` over ssh, exactly as a person would do it, rather than a
+/// ref write. That is what keeps ONE gate: receive-pack runs `hooks/update`, which refuses a
+/// rewrite, a deletion, or any commit nobody has approved. This service cannot reach the
+/// repository any other way — it has no filesystem access to it — so the button cannot become
+/// a way around the thing it exists to serve.
+async fn merge(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<MergeBody>,
+) -> Result<Json<MergeResponse>, AppError> {
+    ensure_same_origin(&headers)?;
+    let Some(config) = state.merge.as_ref().cloned() else {
+        return Err(anyhow!(
+            "merging is not available on this instance: no merge remote is configured"
+        )
+        .into());
+    };
+    let tip = body.tip.trim().to_owned();
+    if tip.len() != 40 || !tip.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(anyhow!("a merge names its tip by full 40-character commit id").into());
+    }
+
+    let repository = state.repository.as_ref().clone();
+    let bookmark = body.bookmark.clone();
+    tracing::info!(who = %identity.0, %bookmark, %tip, "landing a stack");
+
+    // Blocking: git is a subprocess and this is a button press, not a hot path.
+    let output = tokio::task::spawn_blocking(move || push_to_main(&repository, &config, &tip))
+        .await
+        .context("running git push")??;
+
+    Ok(Json(MergeResponse {
+        bookmark: body.bookmark,
+        tip: body.tip,
+        output,
+    }))
+}
+
+fn push_to_main(repository: &Path, config: &MergeConfig, tip: &str) -> Result<String> {
+    // `-o IdentitiesOnly` so an agent or a stray key in the service's home cannot be used
+    // instead of the one deployment intends. `accept-new` records the host key on first use
+    // and refuses a later change, which is the useful half of strict checking for a loopback
+    // remote that is this same machine.
+    let ssh = format!(
+        "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={} -o BatchMode=yes",
+        config.ssh_key.display(),
+        config.known_hosts.display(),
+    );
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .arg("push")
+        .arg(&config.remote)
+        .arg(format!("{tip}:refs/heads/main"))
+        .env("GIT_SSH_COMMAND", ssh)
+        // git writes its progress and the remote's messages to stderr, and the remote's
+        // messages are the whole point of showing the result.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .context("spawning git push")?;
+
+    let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    let text = text.trim().to_owned();
+    if output.status.success() {
+        Ok(text)
+    } else {
+        // Surfaced verbatim: the update hook's refusal names each unapproved change and links
+        // to it, and paraphrasing that would lose the only actionable part.
+        Err(anyhow!(
+            "{}",
+            if text.is_empty() {
+                "git push failed".into()
+            } else {
+                text
+            }
+        ))
+    }
 }
 
 /// Rebuild the approvals file from the database. Run at startup; see `approvals.rs`.

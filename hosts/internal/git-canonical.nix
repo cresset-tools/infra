@@ -80,6 +80,14 @@ let
     # TODO: add the CI push/pull key(s) that mirror integrated work into the
     # canonical remote (a fresh single-purpose ed25519 key; keep the private
     # half in the CI secret store, not a personal key).
+
+    # cresset-view's Merge button. It pushes here exactly as a person does — over ssh, through
+    # git-shell, through receive-pack — so `hooks/update` decides whether the push is allowed.
+    # That is the point of giving it a key rather than filesystem access: the service can only
+    # push, and a push to main is constrained to fast-forward and fully approved.
+    #
+    # It CAN push other refs, as any key here can; the ref that matters is guarded by the hook.
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM67K/ScMYZJScPdhH0X6AROZeGUljVnBTD9+MgNHuS/ cresset-view merge (pushes reviewed stacks to main)"
   ];
 in
 {

@@ -100,14 +100,24 @@ interface ChangeSummary {
   description: string;
   author_name: string;
   authored_at: string;
-  bookmark: string;
   patch_sets: number;
   has_conflict: boolean;
 }
 
+/// One review bookmark and the changes it carries — Gerrit's relation chain.
+///
+/// Landing is a property of the stack, not of a change: advancing main to the tip lands
+/// everything beneath it. So the queue groups by bookmark and the Merge button belongs here.
+interface Stack {
+  bookmark: string;
+  tip: string;
+  /// Oldest first: the order they would land in.
+  changes: ChangeSummary[];
+}
+
 interface ChangesResponse {
   operation_id: string;
-  changes: ChangeSummary[];
+  stacks: Stack[];
 }
 
 interface PatchSet {
@@ -280,6 +290,14 @@ let reviewGated = false;
 /// Who this browser is, as the proxy sees it. Fetched once; the header never reaches the page,
 /// so the UI cannot tell "your" approval from anyone else's without asking.
 let reviewIdentity = '';
+/// Every approval on the instance, so the queue can mark each change without a request each.
+let reviewAllApprovals: Approval[] = [];
+/// What was landed in this session, and is therefore expected to still be listed until the
+/// repository snapshot catches up. Cleared once it is genuinely gone.
+let justMerged: { bookmark: string; tip: string } | null = null;
+/// Whether this instance can land a stack at all. False hides Merge rather than offering a
+/// button that answers "merging is not available on this instance".
+let reviewCanMerge = false;
 /// Whether this instance can be written to. `--review-db` is optional, so a viewer can run with
 /// review read-only; the "+" must not be offered if a comment would be refused.
 let reviewWritable = false;
@@ -340,9 +358,10 @@ async function initialize() {
 
   // Not fatal if it fails: the viewer is useful without knowing who is looking, and an empty
   // identity simply means no approval is shown as yours.
-  reviewIdentity = await fetchJson<{ username: string }>('/api/identity')
-    .then((response) => response.username)
-    .catch(() => '');
+  const me = await fetchJson<{ username: string; can_merge: boolean }>('/api/identity')
+    .catch(() => ({ username: '', can_merge: false }));
+  reviewIdentity = me.username;
+  reviewCanMerge = me.can_merge;
 
   const first = await loadRevisionPage(true);
   if (first == null) return;
@@ -605,10 +624,30 @@ async function loadReviewQueue(wanted: string | null = null) {
     renderLoadFailure('the review queue', error);
     return;
   }
+  // Every approval in one request rather than one per change: the queue needs them all to say
+  // which stacks are ready, and a request per change would make an empty queue cheap and a
+  // busy one slow.
+  try {
+    reviewAllApprovals = await fetchJson<Approval[]>('/api/approvals');
+  } catch {
+    reviewAllApprovals = [];
+  }
 
-  const count = response.changes.length;
-  headCount.textContent = `${count} open`;
-  if (count === 0) {
+  if (justMerged != null) {
+    const stillListed = response.stacks.some((stack) => stack.bookmark === justMerged!.bookmark);
+    const landed = document.createElement('p');
+    landed.className = 'revision-status merged';
+    landed.textContent = stillListed
+      ? `Landed ${justMerged.bookmark} at ${short(justMerged.tip)}. It is still listed below because`
+        + ' the viewer reads a snapshot of the repository, refreshed every couple of minutes.'
+      : `Landed ${justMerged.bookmark} at ${short(justMerged.tip)}.`;
+    revisionList.append(landed);
+    if (!stillListed) justMerged = null;
+  }
+
+  const open = response.stacks.reduce((total, stack) => total + stack.changes.length, 0);
+  headCount.textContent = `${open} open`;
+  if (open === 0) {
     // An empty queue is the normal state, not a fault. Say what would fill it, because the
     // convention is the only thing that puts a change here.
     const empty = document.createElement('p');
@@ -620,32 +659,38 @@ async function loadReviewQueue(wanted: string | null = null) {
     return;
   }
 
-  for (const change of response.changes) {
-    const button = document.createElement('button');
-    button.className = 'revision';
-    button.innerHTML = `
-      <span class="revision-copy">
-        <span class="revision-id">${escapeHtml(short(change.change_id))}</span>
-        <strong>${escapeHtml(firstLine(change.description) || '(no description)')}</strong>
-        <small>${escapeHtml(change.author_name)} · ${formatDateTime(change.authored_at)}</small>
-        <span class="signals">
-          <em>${escapeHtml(change.bookmark)}</em>
-          <em class="${change.patch_sets > 1 ? 'revised' : ''}">${change.patch_sets} patch set${change.patch_sets === 1 ? '' : 's'}</em>
-          ${change.has_conflict ? '<em class="warning">conflict</em>' : ''}
-        </span>
-      </span>`;
-    button.addEventListener('click', () => void selectChange(change.change_id, button));
-    revisionList.append(button);
+  const buttons: HTMLButtonElement[] = [];
+  const order: string[] = [];
+  for (const stack of response.stacks) {
+    revisionList.append(renderStackHeader(stack));
+    for (const change of stack.changes) {
+      const button = document.createElement('button');
+      button.className = 'revision in-stack';
+      const approved = approvalsOf(change.commit_id).length > 0;
+      button.innerHTML = `
+        <span class="revision-copy">
+          <span class="revision-id">${escapeHtml(short(change.change_id))}</span>
+          <strong>${escapeHtml(firstLine(change.description) || '(no description)')}</strong>
+          <small>${escapeHtml(change.author_name)} · ${formatDateTime(change.authored_at)}</small>
+          <span class="signals">
+            <em class="${approved ? 'approved' : 'needs-review'}">${approved ? 'approved' : 'needs review'}</em>
+            <em class="${change.patch_sets > 1 ? 'revised' : ''}">${change.patch_sets} patch set${change.patch_sets === 1 ? '' : 's'}</em>
+            ${change.has_conflict ? '<em class="warning">conflict</em>' : ''}
+          </span>
+        </span>`;
+      button.addEventListener('click', () => void selectChange(change.change_id, button));
+      revisionList.append(button);
+      buttons.push(button);
+      order.push(change.change_id);
+    }
   }
+
   // Open a change without a click: the one the URL asked for, else the first. A `?change=`
   // link is what a refused push prints, so it must land on that change and not on whatever
   // happens to be at the top of the queue.
-  const asked = wanted == null
-    ? -1
-    : response.changes.findIndex((change) => change.change_id.startsWith(wanted));
-  const buttons = [...revisionList.querySelectorAll<HTMLButtonElement>('.revision')];
+  const asked = wanted == null ? -1 : order.findIndex((id) => id.startsWith(wanted));
   const index = asked === -1 ? 0 : asked;
-  if (buttons[index] != null) await selectChange(response.changes[index].change_id, buttons[index]);
+  if (buttons[index] != null) await selectChange(order[index], buttons[index]);
   if (wanted != null && asked === -1) {
     // A change that is not open: landed already, abandoned, or a stale link. Say so, rather
     // than quietly showing a different one and letting someone approve the wrong change.
@@ -653,6 +698,69 @@ async function loadReviewQueue(wanted: string | null = null) {
     note.className = 'revision-status';
     note.textContent = `Change ${short(wanted)} is not open for review — it may have landed already.`;
     revisionList.prepend(note);
+  }
+}
+
+function approvalsOf(commitId: string): Approval[] {
+  return reviewAllApprovals.filter((approval) => approval.commit_id === commitId);
+}
+
+/// A stack's header: the bookmark, how much of it is approved, and the Merge button.
+///
+/// Merge lands the TIP, which lands everything beneath it — so the button lives here rather
+/// than on a change, and is only enabled once every change in the stack is approved. That is
+/// politeness, not enforcement: the gate is the update hook, and if this is wrong the push is
+/// refused and says why.
+function renderStackHeader(stack: Stack): HTMLElement {
+  const ready = stack.changes.filter((c) => approvalsOf(c.commit_id).length > 0).length;
+  const total = stack.changes.length;
+  const mergeable = ready === total && stack.changes.every((c) => !c.has_conflict);
+
+  const header = document.createElement('div');
+  header.className = 'stack-header';
+  header.innerHTML = `
+    <div class="stack-name">
+      <code>${escapeHtml(stack.bookmark)}</code>
+      <span class="stack-count">${ready} of ${total} approved</span>
+    </div>
+    ${!reviewCanMerge ? '' : `
+      <button type="button" class="stack-merge" ${mergeable ? '' : 'disabled'}
+              title="${mergeable ? `Land ${escapeHtml(short(stack.tip))} on main` : 'Every change in the stack must be approved first'}">
+        Merge
+      </button>`}
+  `;
+  header.querySelector<HTMLButtonElement>('.stack-merge')
+    ?.addEventListener('click', (event) => void mergeStack(stack, event.currentTarget as HTMLButtonElement));
+  return header;
+}
+
+async function mergeStack(stack: Stack, button: HTMLButtonElement) {
+  const label = button.textContent ?? 'Merge';
+  button.disabled = true;
+  button.textContent = 'Merging…';
+  button.closest('.stack-header')?.querySelector('.stack-error')?.remove();
+  try {
+    await postJson<{ output: string }>('/api/merge', {
+      bookmark: stack.bookmark,
+      // The tip as it was when this was rendered. If a new patch set has been pushed since,
+      // the push is refused rather than landing something nobody on this screen has read.
+      tip: stack.tip,
+    });
+    // The viewer reads a SNAPSHOT of the repository, refreshed on a timer — so main has moved
+    // on the canonical repository and this queue has not heard about it yet. Reloading alone
+    // would redraw the stack exactly as it was and read as "nothing happened", which is the
+    // worst possible answer to a button that just published to 31 repositories.
+    justMerged = { bookmark: stack.bookmark, tip: stack.tip };
+    await loadReviewQueue();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = label;
+    const message = document.createElement('pre');
+    message.className = 'stack-error';
+    // The update hook's refusal, verbatim: it names each unapproved change and links to it,
+    // and summarising it would throw away the only actionable part.
+    message.textContent = error instanceof Error ? error.message : String(error);
+    button.closest('.stack-header')?.append(message);
   }
 }
 

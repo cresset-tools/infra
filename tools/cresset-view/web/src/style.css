@@ -362,3 +362,56 @@ aside h2 strong { color: var(--muted); font: 500 10px/1.4 var(--mono); letter-sp
 .approval-state.approved { color: var(--accent); }
 /* Anything that would make a push fail despite an approval existing. */
 .approval-note { color: var(--warning-text); background: var(--warning-bg); padding: 2px 8px; font-size: 10px; }
+
+/* The review queue as stacks.
+   A stack is a review bookmark and the changes it carries. Landing is a property of the stack,
+   not of a change — advancing main to the tip lands everything beneath it — so the Merge button
+   belongs to the header and the changes are visibly subordinate to it. */
+.stack-header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 10px 14px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--page-bg);
+}
+.revision-list > .stack-header:first-child { border-top: 0; }
+.stack-name { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
+.stack-name code { color: var(--accent); font: 600 12px/1.4 var(--mono); overflow-wrap: anywhere; }
+.stack-count { color: var(--muted); font: 500 9px/1.4 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.stack-merge {
+  padding: 4px 13px;
+  font: 600 11px/1.4 var(--sans);
+  color: var(--tag-text);
+  background: var(--tag-bg);
+  border: 1px solid var(--tag-bg);
+  cursor: pointer;
+}
+.stack-merge:hover:not(:disabled) { border-color: var(--accent); }
+.stack-merge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Disabled means "not every change is approved yet", which is a normal state to sit in for a
+   while — so it reads as inert rather than broken. */
+.stack-merge:disabled { color: var(--muted); background: var(--panel-bg); border-color: var(--border-soft); cursor: not-allowed; }
+/* The update hook's refusal, verbatim: it lists each unapproved change and links to it. */
+.stack-error {
+  flex-basis: 100%;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11px/1.5 var(--mono);
+  color: var(--warning-text);
+  background: var(--warning-bg);
+}
+/* Indented under their header; the grouping is carried by the heading and the inset rather
+   than by a drawn rail, which fought the button's own padding. */
+.revision.in-stack { padding-left: 22px; }
+.signals em.approved { color: var(--accent); border-color: var(--accent); }
+.signals em.needs-review { color: var(--muted); }
+/* A stack that has just been landed but is still listed, because the viewer reads a snapshot
+   of the repository rather than the repository. Saying so beats a button that appears inert. */
+.revision-status.merged { color: var(--accent); border-left: 3px solid var(--accent); padding-left: 9px; }

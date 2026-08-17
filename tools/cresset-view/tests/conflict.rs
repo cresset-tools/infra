@@ -473,20 +473,96 @@ fn the_queue_lists_changes_that_have_not_landed() {
         .get("/api/changes")
         .expect("the queue must be served");
     let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
-    let changes = value["changes"].as_array().expect("changes array");
+    let stacks = value["stacks"].as_array().expect("stacks array");
 
     assert_eq!(
-        changes.len(),
+        stacks.len(),
         1,
-        "one change is open; `main` must not be listed: {value}"
+        "one review bookmark is open; `main` must not be listed: {value}"
     );
+    assert_eq!(
+        stacks[0]["bookmark"], "review/thing",
+        "the review bookmark is REMOTE in a fetching repo, which is all the viewer ever has"
+    );
+    assert_eq!(
+        stacks[0]["tip"], commit,
+        "the tip is what merging would move main to"
+    );
+    let changes = stacks[0]["changes"].as_array().expect("changes array");
+    assert_eq!(changes.len(), 1);
     assert_eq!(changes[0]["change_id"], change);
     assert_eq!(changes[0]["commit_id"], commit);
     assert_eq!(changes[0]["patch_sets"], 1);
-    assert_eq!(
-        changes[0]["bookmark"], "review/thing",
-        "the review bookmark is REMOTE in a fetching repo, which is all the viewer ever has"
+}
+
+/// A stack is grouped under its own bookmark, oldest first, and two stacks do not mix.
+///
+/// The flat queue could not do this: a commit partway up a stack carries no bookmark of its
+/// own, and the fallback picked an arbitrary one — so with two review bookmarks open, a change
+/// could be listed under the wrong one, and merging the wrong bookmark would land it anyway.
+#[test]
+fn a_stack_is_grouped_under_its_bookmark_in_landing_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (first_change, _) = review_repo(dir.path());
+    let work = dir.path().join("work");
+
+    // A second commit on the same bookmark: a relation chain.
+    jj(&work, &["new", "review/thing", "-m", "and another"]);
+    std::fs::write(work.join("h.txt"), "two\n").expect("write");
+    jj(&work, &["bookmark", "set", "review/thing", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "review/thing"]);
+    let second_change = jj(&work, &["log", "-r", "@", "--no-graph", "-T", "change_id"]);
+    let tip = jj(&work, &["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+
+    // And an unrelated bookmark off main, to prove the two do not bleed into each other.
+    jj(&work, &["new", "main", "-m", "elsewhere"]);
+    std::fs::write(work.join("i.txt"), "other\n").expect("write");
+    jj(&work, &["bookmark", "set", "review/other", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "review/other"]);
+    let other_change = jj(&work, &["log", "-r", "@", "--no-graph", "-T", "change_id"]);
+
+    let viewer = dir.path().join("viewer");
+    let out = Command::new("jj")
+        .args(["git", "fetch", "--remote", "origin"])
+        .current_dir(&viewer)
+        .env("JJ_CONFIG", "/dev/null")
+        .env("HOME", dir.path())
+        .output()
+        .expect("fetch");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
+
+    let server = Server::start(&viewer);
+    let body = server.get("/api/changes").expect("queue");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    let stacks = value["stacks"].as_array().expect("stacks");
+    assert_eq!(stacks.len(), 2, "two bookmarks, two stacks: {value}");
+
+    let thing = stacks
+        .iter()
+        .find(|s| s["bookmark"] == "review/thing")
+        .expect("review/thing");
+    let changes = thing["changes"].as_array().expect("changes");
+    assert_eq!(
+        changes
+            .iter()
+            .map(|c| c["change_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec![first_change.as_str(), second_change.as_str()],
+        "oldest first: the order they would land in"
+    );
+    assert_eq!(thing["tip"], tip, "merging lands the newest commit");
+
+    let other = stacks
+        .iter()
+        .find(|s| s["bookmark"] == "review/other")
+        .expect("review/other");
+    let others = other["changes"].as_array().expect("changes");
+    assert_eq!(others.len(), 1, "the unrelated stack carries only its own");
+    assert_eq!(others[0]["change_id"], other_change);
 }
 
 #[test]
@@ -863,6 +939,120 @@ fn an_instance_without_the_gate_says_so() {
     assert_eq!(
         body["gated"], false,
         "it must not imply an enforcement that is not there"
+    );
+}
+
+/// Merging goes through receive-pack, so the update hook decides — and its refusal is shown.
+///
+/// This is the property the Merge button rests on. cresset-view pushes rather than writing a
+/// ref, which is what keeps ONE gate: if this ever became a direct ref write, the button would
+/// become a way around the approvals it exists to serve. The hook here is a stand-in — the real
+/// one is exercised by `nix flake check` — because what matters at this layer is that a hook
+/// runs at all and that its message reaches the caller.
+#[test]
+fn merging_is_a_push_and_the_hook_still_decides() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_change, commit) = review_repo(dir.path());
+    let bare = dir.path().join("canonical.git");
+    let allow = dir.path().join("allow");
+
+    std::fs::write(
+        bare.join("hooks/update"),
+        format!(
+            "#!/bin/sh\n\
+             [ -e {} ] && exit 0\n\
+             echo 'refusing: not every commit has been approved' >&2\n\
+             exit 1\n",
+            allow.display()
+        ),
+    )
+    .expect("write hook");
+    let mut mode = std::fs::metadata(bare.join("hooks/update"))
+        .expect("stat hook")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(bare.join("hooks/update"), mode).expect("chmod hook");
+
+    let viewer = dir.path().join("viewer");
+    let review_db = dir.path().join("review.db");
+    let server = Server::start_with(
+        &viewer,
+        &[
+            "--review-db",
+            review_db.to_str().unwrap(),
+            // A local path stands in for the ssh remote: the transport is not what is under
+            // test, the fact that a push happens is.
+            "--merge-remote",
+            bare.to_str().unwrap(),
+            "--merge-ssh-key",
+            "/dev/null",
+        ],
+    );
+
+    let head_of_main = || {
+        let out = Command::new("git")
+            .arg("--git-dir")
+            .arg(&bare)
+            .args(["rev-parse", "refs/heads/main"])
+            .output()
+            .expect("rev-parse");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let before = head_of_main();
+
+    let body = format!(r#"{{"bookmark":"review/thing","tip":"{commit}"}}"#);
+    let (status, refused) = server.post("/api/merge", &body, &[]);
+    assert_eq!(
+        status, 400,
+        "an unapproved merge must be refused: {refused}"
+    );
+    assert!(
+        refused.contains("not every commit has been approved"),
+        "the hook's own message must reach the reviewer, since it is the actionable part: {refused}"
+    );
+    assert_eq!(head_of_main(), before, "a refused merge must not move main");
+
+    // The same merge, once the hook is satisfied.
+    std::fs::write(&allow, "").expect("allow");
+    let (status, merged) = server.post("/api/merge", &body, &[]);
+    assert_eq!(status, 200, "an approved merge must land: {merged}");
+    assert_eq!(
+        head_of_main(),
+        commit,
+        "main must be at the tip that was merged"
+    );
+
+    // A short id would push something other than what was on screen.
+    let (status, _) = server.post(
+        "/api/merge",
+        r#"{"bookmark":"review/thing","tip":"abc1234"}"#,
+        &[],
+    );
+    assert_eq!(status, 400, "a merge names its tip in full");
+
+    // And a cross-site merge is refused, for the reason every write here is: proxy-header
+    // authentication makes any tab in the reviewer's browser an authenticated actor, and this
+    // is the button that publishes.
+    let (status, refused) = server.post("/api/merge", &body, &[("sec-fetch-site", "cross-site")]);
+    assert_eq!(status, 400, "a cross-site merge must be refused: {refused}");
+    assert!(refused.contains("same-origin"), "and say why: {refused}");
+}
+
+/// An instance with no merge remote says so rather than failing obscurely.
+#[test]
+fn an_instance_that_cannot_merge_explains_itself() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_change, commit) = review_repo(dir.path());
+    let server = Server::start(&dir.path().join("viewer"));
+    let (status, message) = server.post(
+        "/api/merge",
+        &format!(r#"{{"bookmark":"review/thing","tip":"{commit}"}}"#),
+        &[],
+    );
+    assert_eq!(status, 400);
+    assert!(
+        message.contains("not available"),
+        "it must say merging is unavailable here: {message}"
     );
 }
 
