@@ -4,13 +4,15 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod review;
+
 use anyhow::{Context, Result, anyhow, bail};
 use axum::body::{Body, Bytes};
-use axum::extract::{Path as AxumPath, Query, Request, State};
+use axum::extract::{Extension, Path as AxumPath, Query, Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
 use futures::channel::mpsc;
@@ -55,6 +57,11 @@ struct Args {
     /// Optional on purpose. cresset-view is a repository viewer first; the worker may not be
     /// deployed, may not have run yet, or may be on another host. Its absence removes a panel,
     /// it does not break the service.
+    /// Where review threads are stored. Absent means review is read-only: the queue and patch
+    /// sets still work, and writing returns a clear error rather than silently discarding.
+    #[arg(long, env = "CRESSET_VIEW_REVIEW_DB")]
+    review_db: Option<PathBuf>,
+
     #[arg(long, env = "CRESSET_VIEW_SYNC_DB")]
     sync_db: Option<PathBuf>,
 
@@ -76,6 +83,7 @@ struct Args {
 struct AppState {
     repository: Arc<PathBuf>,
     sync_db: Option<Arc<PathBuf>>,
+    review_db: Option<Arc<PathBuf>>,
 }
 
 #[derive(Debug)]
@@ -350,7 +358,35 @@ async fn require_identity(
         )
             .into_response();
     }
+    // Carry the identity to the handlers. It used to be checked and thrown away, which was
+    // enough while everything was read-only; a comment has an author. The proxy header wins,
+    // falling back to --dev-identity so local development behaves the same.
+    let who = if identity.is_empty() {
+        dev_identity.as_deref().unwrap_or_default().to_string()
+    } else {
+        identity.to_string()
+    };
+    let mut request = request;
+    request.extensions_mut().insert(Identity(who));
     next.run(request).await
+}
+
+/// The authenticated user, as the proxy asserted them.
+#[derive(Clone, Debug)]
+struct Identity(String);
+
+/// Refuse a write a browser was talked into making from another site.
+///
+/// Authentication here is a proxy header, so ANY request the user's browser makes carries it —
+/// a tab on a hostile page is an authenticated actor regardless of intent. Browsers label
+/// cross-site requests with `Sec-Fetch-Site`, so an explicit non-same-origin value is refused.
+/// An absent header means a non-browser client (curl, the tests), which cannot be induced to
+/// forge a request on someone else's behalf.
+fn ensure_same_origin(headers: &axum::http::HeaderMap) -> Result<()> {
+    match headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
+        None | Some("same-origin") | Some("none") => Ok(()),
+        Some(other) => bail!("refusing a {other} write; this endpoint is same-origin only"),
+    }
 }
 
 #[tokio::main]
@@ -386,6 +422,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         repository: Arc::new(args.repository),
         sync_db: args.sync_db.map(Arc::new),
+        review_db: args.review_db.map(Arc::new),
     };
     let index = args.assets.join("index.html");
     let static_files = ServeDir::new(&args.assets).not_found_service(ServeFile::new(index));
@@ -398,6 +435,12 @@ async fn main() -> Result<()> {
         .route("/api/bookmarks", get(bookmarks))
         .route("/api/changes", get(changes))
         .route("/api/changes/{id}", get(change))
+        .route(
+            "/api/changes/{id}/threads",
+            get(list_threads).post(create_thread),
+        )
+        .route("/api/threads/{id}/comments", post(reply_to_thread))
+        .route("/api/threads/{id}/resolve", post(resolve_thread))
         .route("/api/sync", get(sync_status))
         .route("/api/revisions/{id}/tree", get(tree))
         .route("/api/revisions/{id}/file", get(file))
@@ -845,6 +888,113 @@ async fn change(
     })
     .await?;
     Ok(Json(response))
+}
+
+/// Open the review store, or explain why writing is unavailable.
+///
+/// Opened per request, matching how the sync database is read: a `Connection` is not `Sync`,
+/// and SQLite handles concurrent opens perfectly well.
+fn open_review(state: &AppState) -> Result<review::Review> {
+    let Some(path) = state.review_db.as_ref() else {
+        bail!("review is read-only on this instance: no review database is configured");
+    };
+    review::Review::open(path.as_ref())
+}
+
+#[derive(Deserialize)]
+struct NewThreadBody {
+    path: String,
+    side: String,
+    line: i64,
+    /// The anchored line's text and its surrounding lines, captured by the browser. Stored
+    /// verbatim; the server never interprets them.
+    fingerprint: String,
+    context: String,
+    body: String,
+    /// Which patch set the reader was looking at.
+    patch_set_commit_id: String,
+}
+
+#[derive(Deserialize)]
+struct ReplyBody {
+    body: String,
+    patch_set_commit_id: String,
+}
+
+#[derive(Deserialize)]
+struct ResolveBody {
+    resolved: bool,
+}
+
+async fn list_threads(
+    State(state): State<AppState>,
+    AxumPath(change_id): AxumPath<String>,
+) -> Result<Json<Vec<review::ThreadRow>>, AppError> {
+    let db = open_review(&state)?;
+    Ok(Json(db.threads_for_change(&change_id)?))
+}
+
+async fn create_thread(
+    State(state): State<AppState>,
+    AxumPath(change_id): AxumPath<String>,
+    Extension(identity): Extension<Identity>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<NewThreadBody>,
+) -> Result<Json<review::ThreadRow>, AppError> {
+    ensure_same_origin(&headers)?;
+    if body.body.trim().is_empty() {
+        return Err(anyhow!("a comment needs something in it").into());
+    }
+    let mut db = open_review(&state)?;
+    let thread = db.start_thread(&review::NewThread {
+        change_id,
+        path: body.path,
+        side: review::Side::parse(&body.side)?,
+        line: body.line,
+        fingerprint: body.fingerprint,
+        context: body.context,
+        created_by: identity.0,
+        body: body.body,
+        patch_set_commit_id: body.patch_set_commit_id,
+    })?;
+    Ok(Json(thread))
+}
+
+async fn reply_to_thread(
+    State(state): State<AppState>,
+    AxumPath(thread_id): AxumPath<i64>,
+    Extension(identity): Extension<Identity>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<ReplyBody>,
+) -> Result<Json<review::ThreadRow>, AppError> {
+    ensure_same_origin(&headers)?;
+    if body.body.trim().is_empty() {
+        return Err(anyhow!("a comment needs something in it").into());
+    }
+    let db = open_review(&state)?;
+    match db.reply(
+        thread_id,
+        &body.body,
+        &identity.0,
+        &body.patch_set_commit_id,
+    )? {
+        Some(thread) => Ok(Json(thread)),
+        None => Err(anyhow!("no thread {thread_id}").into()),
+    }
+}
+
+async fn resolve_thread(
+    State(state): State<AppState>,
+    AxumPath(thread_id): AxumPath<i64>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<ResolveBody>,
+) -> Result<Json<review::ThreadRow>, AppError> {
+    ensure_same_origin(&headers)?;
+    let db = open_review(&state)?;
+    match db.set_resolved(thread_id, body.resolved)? {
+        Some(thread) => Ok(Json(thread)),
+        None => Err(anyhow!("no thread {thread_id}").into()),
+    }
 }
 
 async fn bookmarks(State(state): State<AppState>) -> Result<Json<BookmarkResponse>, AppError> {

@@ -227,7 +227,7 @@ in
       # holds it, and that is deliberately survivable rather than fatal. If it proves flaky in
       # practice, the fix is for the worker to write a small JSON snapshot after each pass and
       # for this to read that instead — a plain file read has none of these problems.
-      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080 --sync-db /srv/sync/state.db";
+      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080 --sync-db /srv/sync/state.db --review-db /var/lib/cresset-view/review.db";
       Restart = "on-failure";
       RestartSec = "3s";
       NoNewPrivileges = true;
@@ -236,6 +236,10 @@ in
       ProtectHome = true;
       ProtectSystem = "strict";
       ReadOnlyPaths = [ "/var/lib/cresset-view/repository/current" "/srv/sync" ];
+      # The review store is the first thing this service writes. Narrow on purpose: the
+      # repository stays read-only above, so a defect in the review code cannot reach the
+      # thing being reviewed.
+      ReadWritePaths = [ "/var/lib/cresset-view" ];
       # /srv is a nofail Cloud Volume, so the viewer must not be held up by it: the sync panel
       # degrades on its own if the path is absent.
       RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];

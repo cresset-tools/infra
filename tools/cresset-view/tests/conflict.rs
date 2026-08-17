@@ -114,6 +114,11 @@ impl Drop for Server {
 
 impl Server {
     fn start(repository: &Path) -> Self {
+        Self::start_with(repository, &[])
+    }
+
+    /// Start with extra flags, e.g. `--review-db` for the write endpoints.
+    fn start_with(repository: &Path, extra: &[&str]) -> Self {
         let port = free_port();
         let child = Command::new(env!("CARGO_BIN_EXE_cresset-view"))
             .arg("--repository")
@@ -123,6 +128,7 @@ impl Server {
             // The API needs no assets; ServeDir simply 404s for a directory that is not there.
             .arg("--assets")
             .arg(repository.join("no-assets"))
+            .args(extra)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -161,6 +167,37 @@ impl Server {
         let raw = self.request(path)?;
         let (head, body) = raw.split_once("\r\n\r\n")?;
         head.starts_with("HTTP/1.1 200").then(|| body.to_string())
+    }
+
+    /// A POST with a JSON body. `extra` carries headers a test needs to set, such as
+    /// `Sec-Fetch-Site` for the cross-site refusal.
+    fn post(&self, path: &str, body: &str, extra: &[(&str, &str)]) -> (u16, String) {
+        let mut head = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+             x-authentik-username: test\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\n",
+            body.len()
+        );
+        for (name, value) in extra {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
+        head.push_str("\r\n");
+        let raw = (|| {
+            let mut stream = TcpStream::connect(("127.0.0.1", self.port)).ok()?;
+            stream.write_all(head.as_bytes()).ok()?;
+            stream.write_all(body.as_bytes()).ok()?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response).ok()?;
+            Some(response)
+        })()
+        .unwrap_or_default();
+        let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
+        let status = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|c| c.parse().ok())
+            .unwrap_or(0);
+        (status, body.to_string())
     }
 
     fn request(&self, path: &str) -> Option<String> {
@@ -593,4 +630,77 @@ fn a_superseded_patch_set_can_still_be_read() {
         .expect("change served");
     let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
     assert_eq!(value["patch_sets"].as_array().expect("patch_sets").len(), 2);
+}
+
+/// Writing a comment: identity comes from the proxy header, and a cross-site write is refused.
+#[test]
+fn a_thread_records_its_author_and_refuses_cross_site_writes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, commit) = review_repo(dir.path());
+
+    let viewer = dir.path().join("viewer");
+    let review_db = dir.path().join("review.db");
+    let server = Server::start_with(&viewer, &["--review-db", review_db.to_str().unwrap()]);
+
+    let body = format!(
+        r#"{{"path":"g.txt","side":"additions","line":1,"fingerprint":"one",
+            "context":"[]","body":"why one?","patch_set_commit_id":"{commit}"}}"#
+    );
+    let (status, created) = server.post(&format!("/api/changes/{change}/threads"), &body, &[]);
+    assert_eq!(status, 200, "creating a thread must succeed: {created}");
+    let created: serde_json::Value = serde_json::from_str(&created).expect("valid json");
+
+    // The author is whoever the proxy said, not anything the client sent — a client-supplied
+    // author would let one reviewer sign another's name.
+    assert_eq!(created["created_by"], "test");
+    assert_eq!(created["comments"].as_array().expect("comments").len(), 1);
+    assert_eq!(created["comments"][0]["body"], "why one?");
+
+    // Authentication is a proxy header, so a tab on a hostile page is an authenticated actor.
+    // An explicit cross-site label must be refused.
+    let (status, refused) = server.post(
+        "/api/threads/1/resolve",
+        r#"{"resolved":true}"#,
+        &[("sec-fetch-site", "cross-site")],
+    );
+    assert_eq!(status, 400, "a cross-site write must be refused");
+    assert!(
+        refused.contains("same-origin"),
+        "the refusal must say why: {refused}"
+    );
+
+    // The same write from our own origin is fine.
+    let (status, _) = server.post(
+        "/api/threads/1/resolve",
+        r#"{"resolved":true}"#,
+        &[("sec-fetch-site", "same-origin")],
+    );
+    assert_eq!(status, 200, "a same-origin write must be allowed");
+
+    // And the thread is listed against its change.
+    let listed = server
+        .get(&format!("/api/changes/{change}/threads"))
+        .expect("threads listed");
+    let listed: serde_json::Value = serde_json::from_str(&listed).expect("valid json");
+    assert_eq!(listed.as_array().expect("array").len(), 1);
+    assert_eq!(listed[0]["resolved"], true);
+}
+
+/// Without a review database the instance stays read-only, and says so.
+#[test]
+fn writing_without_a_review_database_explains_itself() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, commit) = review_repo(dir.path());
+    let server = Server::start(&dir.path().join("viewer"));
+
+    let body = format!(
+        r#"{{"path":"g.txt","side":"additions","line":1,"fingerprint":"one",
+            "context":"[]","body":"x","patch_set_commit_id":"{commit}"}}"#
+    );
+    let (status, message) = server.post(&format!("/api/changes/{change}/threads"), &body, &[]);
+    assert_eq!(status, 400);
+    assert!(
+        message.contains("read-only"),
+        "it must say the instance is read-only rather than failing obscurely: {message}"
+    );
 }

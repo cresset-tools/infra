@@ -65,6 +65,9 @@ let
   stage = "/var/lib/borg-stage";
   canonical = "/srv/git/cresset.git";
   syncDb = "/srv/sync/state.db";
+  # Review discussion. Not reconstructible from anything: unlike the checkpoint database,
+  # which could be rebuilt by re-bootstrapping every project, a comment exists only here.
+  reviewDb = "/var/lib/cresset-view/review.db";
   # The worker's own single-instance lock. Taking it means no pass can be advancing `main` on
   # the canonical repo, or writing the checkpoint database, while they are being read.
   lease = "/srv/sync/lease.lock";
@@ -127,6 +130,21 @@ in
           # stage. A restore then needs one file, and a database that cannot be opened is
           # discovered now rather than when it is the only one left.
           ${pkgs.sqlite}/bin/sqlite3 ${stage}/state.db "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
+          # The review store, the same way. Absent on an instance where review was never
+          # enabled, which is not an error.
+          if [ -e ${reviewDb} ]; then
+            ${pkgs.coreutils}/bin/cp -p ${reviewDb} ${stage}/review.db
+            for sidecar in -wal -shm; do
+              if [ -e "${reviewDb}$sidecar" ]; then
+                ${pkgs.coreutils}/bin/cp -p "${reviewDb}$sidecar" "${stage}/review.db$sidecar"
+              fi
+            done
+            ${pkgs.sqlite}/bin/sqlite3 ${stage}/review.db "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
+            if [ "$(${pkgs.sqlite}/bin/sqlite3 ${stage}/review.db 'PRAGMA integrity_check;')" != "ok" ]; then
+              echo "staged review database failed integrity_check; refusing to back it up" >&2
+              exit 1
+            fi
+          fi
           if [ "$(${pkgs.sqlite}/bin/sqlite3 ${stage}/state.db 'PRAGMA integrity_check;')" != "ok" ]; then
             echo "staged checkpoint database failed integrity_check; refusing to back it up" >&2
             exit 1
