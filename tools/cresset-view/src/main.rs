@@ -1263,19 +1263,47 @@ fn push_to_main(repository: &Path, config: &MergeConfig, tip: &str) -> Result<St
     text.push_str(&String::from_utf8_lossy(&output.stdout));
     let text = text.trim().to_owned();
     if output.status.success() {
-        Ok(text)
-    } else {
-        // Surfaced verbatim: the update hook's refusal names each unapproved change and links
-        // to it, and paraphrasing that would lose the only actionable part.
-        Err(anyhow!(
-            "{}",
-            if text.is_empty() {
-                "git push failed".into()
-            } else {
-                text
-            }
-        ))
+        return Ok(text);
     }
+
+    // A non-fast-forward means main moved while this change was open -- an import landed, or
+    // someone else's change did. git's own advice for it is `git pull`, which is wrong twice
+    // over here: this is a jj repository, and the answer is to rebase the change rather than to
+    // merge main into it. Replace that specific case; everything else passes through.
+    //
+    // Matched on git's output because the push is what discovers it: checking beforehand would
+    // be a second round trip that the push itself can still lose a race to.
+    // Three spellings for one situation, because git picks its wording by case and they were
+    // NOT interchangeable in practice: the box produced "non-fast-forward" and "behind its
+    // remote counterpart", while the test fixture produces "fetch first". Matching only the
+    // first would have shipped a paraphrase that missed the case a test could reach, which is
+    // how this list came to have three entries.
+    let stale = ["non-fast-forward", "behind its remote", "fetch first"]
+        .iter()
+        .any(|reason| text.contains(reason));
+    if stale {
+        return Err(anyhow!(
+            "main has moved since this change was pushed, so it cannot land as it stands.\n\n\
+             Rebase it onto the new main and push the review bookmark again:\n\n\
+             \u{20}   jj git fetch\n\
+             \u{20}   jj rebase -s <the change> -d 'main@origin'\n\
+             \u{20}   jj bookmark set <review bookmark> -r <the NEW commit id>\n\
+             \u{20}   jj git push -b <review bookmark>\n\n\
+             The rebase gives the change a new commit id, so it needs approving again: the \
+             approval was for the version that was read, and this is not that version."
+        ));
+    }
+
+    // Everything else verbatim: the update hook's refusal names each unapproved change and
+    // links to it, and paraphrasing that would lose the only actionable part.
+    Err(anyhow!(
+        "{}",
+        if text.is_empty() {
+            "git push failed".into()
+        } else {
+            text
+        }
+    ))
 }
 
 /// Rebuild the approvals file from the database. Run at startup; see `approvals.rs`.

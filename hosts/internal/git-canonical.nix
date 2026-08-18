@@ -150,6 +150,21 @@ in
         git -C ${bareRepo} symbolic-ref HEAD refs/heads/main
       fi
 
+      # `git init --shared=group` sets `receive.denyNonFastForwards = true` as a side effect.
+      # That is precisely the blunt setting the comment at the top of this file says would be a
+      # mistake, and it was on from the day the repository was created: amending a change under
+      # review produces a new commit id, so re-pushing a review bookmark for a second round is
+      # inherently a non-fast-forward, and the remote refused it.
+      #
+      # It went unnoticed because nothing exercised it. The flake check builds its bare repo
+      # with a plain `git init --bare`, which does NOT set this, so amend-and-re-push passed in
+      # the sandbox and failed on the box. The check now uses --shared=group for that reason.
+      #
+      # Set explicitly rather than left to the init branch above, so an existing repository is
+      # repaired on the next deploy rather than only new ones being correct. `main` is protected
+      # by hooks/update, which is a rule about one ref rather than about every ref.
+      git config --file ${bareRepo}/config receive.denyNonFastForwards false
+
       # Installed unconditionally, not only at creation, so a repository made before this
       # protection existed picks it up on the next deploy.
       install -d -o git -g git -m 0755 ${bareRepo}/hooks

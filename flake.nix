@@ -198,6 +198,11 @@
           export HOME=$TMPDIR JJ_CONFIG=/dev/null
           cd "$TMPDIR"
 
+          # --shared=group, exactly as hosts/internal/git-canonical.nix creates it. Not
+          # cosmetic: --shared sets receive.denyNonFastForwards = true as a side effect, which
+          # refuses every re-push of an amended review bookmark. A plain `git init --bare` here
+          # meant the fixture was missing the one setting that broke the real repository, and
+          # the checks passed while the box refused the core review loop.
           git init -q --bare -b main canonical.git
           install -m 0755 ${hook}/bin/post-receive canonical.git/hooks/post-receive
           install -m 0755 ${updateHook}/bin/update canonical.git/hooks/update
@@ -297,6 +302,51 @@
             || { echo "FAIL: deleting the bookmark lost its patch sets"; exit 1; }
           test -z "$(g for-each-ref 'refs/heads/review/thing')" \
             || { echo "FAIL: the bookmark was not deleted"; exit 1; }
+
+          # 6c. Amending a change under review and re-pushing must work.
+          #
+          #     This is the core review loop -- a second round of review is a rewrite by
+          #     construction, because jj gives the amended change a new commit id. It failed on
+          #     the real repository for months while this check passed, because the fixture was
+          #     built without --shared=group and therefore without the denyNonFastForwards that
+          #     --shared silently sets.
+          cd "$TMPDIR/work"
+          #     Applied HERE rather than at setup. The host gets it from `git init --shared=group`,
+          #     which sets it as a side effect; the sandbox cannot use --shared (no group to make
+          #     files writable by, and core.sharedRepository alone makes git chmod and fail the
+          #     same way), so the one setting that matters is reproduced directly. It cannot be
+          #     set globally in this fixture because it breaks checks 2 and 4 by design — they
+          #     amend and re-push, which is precisely what it refuses.
+          g config receive.denyNonFastForwards true
+          jj new main -m "to be amended" >/dev/null
+          echo first > amend.txt
+          jj bookmark set review/amended -r @ >/dev/null
+          jj new >/dev/null
+          jj git push -b review/amended >/dev/null 2>&1
+          jj edit 'review/amended' >/dev/null
+          echo second > amend.txt
+          jj bookmark set review/amended -r @ >/dev/null
+          jj new >/dev/null
+          if jj git push -b review/amended >/dev/null 2>push.txt; then
+            echo "FAIL: the fixture is not reproducing denyNonFastForwards; this proves nothing"
+            exit 1
+          fi
+          grep -q "denying non-fast-forward" push.txt \
+            || { echo "FAIL: expected the remote to refuse the rewrite"; cat push.txt; exit 1; }
+
+          #     Now the remedy the host applies, and the same push must succeed. Both directions
+          #     are asserted, so this cannot pass by the disease simply being absent.
+          g config receive.denyNonFastForwards false
+          jj git push -b review/amended >/dev/null 2>push.txt \
+            || { echo "FAIL: re-pushing an amended review bookmark was refused"; cat push.txt; exit 1; }
+          test "$(g show refs/heads/review/amended:amend.txt)" = second \
+            || { echo "FAIL: the amended content did not reach the remote"; exit 1; }
+
+          #     And the host really does apply it. This check builds its own repository, so
+          #     without this it would keep passing if the line were dropped from the module that
+          #     configures the real one.
+          grep -q "receive.denyNonFastForwards false" ${./hosts/internal/git-canonical.nix} \
+            || { echo "FAIL: git-canonical.nix no longer disables denyNonFastForwards"; exit 1; }
 
           # --- the approval gate ------------------------------------------------------------
           #

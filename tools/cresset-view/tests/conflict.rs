@@ -1038,6 +1038,67 @@ fn merging_is_a_push_and_the_hook_still_decides() {
     assert!(refused.contains("same-origin"), "and say why: {refused}");
 }
 
+/// A change whose base has moved is told to rebase, not to `git pull`.
+///
+/// This happens for real and is not an error state: an import lands on main while a change is
+/// open for review, and the change is then behind. git's own advice for a non-fast-forward is
+/// `git pull`, which in a jj repository is wrong twice over -- so the raw output is exactly the
+/// wrong thing to show, and this is the one push failure that is paraphrased.
+#[test]
+fn a_change_left_behind_by_main_is_told_to_rebase() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_change, commit) = review_repo(dir.path());
+    let bare = dir.path().join("canonical.git");
+    let work = dir.path().join("work");
+
+    // Move main on the canonical repo, so the change under review is now behind it -- exactly
+    // what an automated import landing mid-review does.
+    jj(
+        &work,
+        &["new", "main", "-m", "landed while the change was open"],
+    );
+    std::fs::write(work.join("landed.txt"), "meanwhile\n").expect("write");
+    jj(&work, &["bookmark", "set", "main", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "main"]);
+
+    let viewer = dir.path().join("viewer");
+    let review_db = dir.path().join("review.db");
+    let server = Server::start_with(
+        &viewer,
+        &[
+            "--review-db",
+            review_db.to_str().unwrap(),
+            "--merge-remote",
+            bare.to_str().unwrap(),
+            "--merge-ssh-key",
+            "/dev/null",
+        ],
+    );
+
+    let (status, message) = server.post(
+        "/api/merge",
+        &format!(r#"{{"bookmark":"review/thing","tip":"{commit}"}}"#),
+        &[],
+    );
+    assert_eq!(status, 400, "a stale change cannot land: {message}");
+    assert!(
+        message.contains("main has moved"),
+        "it must say what happened: {message}"
+    );
+    assert!(
+        message.contains("jj rebase"),
+        "and give the command that fixes it: {message}"
+    );
+    assert!(
+        !message.contains("git pull"),
+        "and must not repeat git's advice, which is wrong for this repository: {message}"
+    );
+    assert!(
+        message.contains("approving again"),
+        "and warn that the rebase invalidates the approval: {message}"
+    );
+}
+
 /// An instance with no merge remote says so rather than failing obscurely.
 #[test]
 fn an_instance_that_cannot_merge_explains_itself() {
