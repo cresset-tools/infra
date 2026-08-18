@@ -12,6 +12,18 @@ set -eu
 # database: `refs/changes/<change-id>/<n>`. Deliberately git-only — a hook that wrote to
 # cresset-view's SQLite would need cross-user access to a WAL database, which is exactly what
 # leaves /api/sync reporting no projects today.
+# Wake the viewer as soon as the push lands, rather than leaving it to the two-minute timer.
+#
+# A sentinel file rather than `systemctl start`: this hook runs as `git`, and starting a unit
+# owned by root would need a polkit rule or sudo — a privilege this account exists specifically
+# not to have. A systemd .path unit watches this file and starts the refresh, so the escalation
+# is systemd's rather than the hook's.
+#
+# Touched unconditionally, before any filtering: a push to `main` needs the viewer to notice
+# just as much as a push to `review/*` does, and the loop below only concerns itself with the
+# latter. `|| true` because a viewer that is a little stale is not a reason to reject a push.
+touch /srv/git/.refresh-requested 2>/dev/null || true
+
 while read -r _old new ref; do
   case "$ref" in
     refs/heads/review/*) ;;

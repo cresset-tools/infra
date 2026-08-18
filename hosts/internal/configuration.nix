@@ -350,6 +350,30 @@ in
       };
     };
 
+    # Refresh the moment a push lands, instead of up to two minutes later.
+    #
+    # hooks/post-receive touches the sentinel as the `git` user; this starts the fetch as
+    # cresset-view. Neither account gains anything over the other — the escalation is systemd's,
+    # which is the point of doing it this way rather than giving the hook `systemctl start`.
+    #
+    # The timer below STAYS, and is not redundant: the sync worker advances `main` with a local
+    # `git update-ref`, which runs no hooks at all, so an import would otherwise not wake
+    # anything. The path unit makes the common case immediate; the timer is what catches
+    # everything that does not come in over the wire.
+    systemd.paths.cresset-view-refresh = {
+      description = "Refresh the viewer as soon as something is pushed to the canonical repo";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "srv.mount" ];
+      unitConfig.RequiresMountsFor = "/srv";
+      pathConfig = {
+        # PathModified rather than PathChanged: `touch` on an existing file is a write-and-close,
+        # which PathChanged does not report. The file is created once by the init unit so the
+        # first push after a fresh deploy is not the one that goes unnoticed.
+        PathModified = "/srv/git/.refresh-requested";
+        Unit = "cresset-view-refresh.service";
+      };
+    };
+
     systemd.timers.cresset-view-refresh = {
       description = "Keep the cresset-view repository within a couple of minutes of canonical";
       wantedBy = [ "timers.target" ];

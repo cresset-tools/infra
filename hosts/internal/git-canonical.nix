@@ -187,6 +187,11 @@ in
       git config --file ${bareRepo}/config cresset.breakGlassFile ${breakGlassFile}
       git config --file ${bareRepo}/config cresset.reviewUrl https://code.cresset.tools
 
+      # The sentinel hooks/post-receive touches to wake the viewer. Created here so it exists
+      # before the first push: systemd's PathModified watches a path, and a file that has never
+      # existed makes the first push the one that goes unnoticed.
+      install -o git -g git -m 0644 /dev/null ${gitHome}/.refresh-requested
+
       # Belt-and-braces: keep the whole tree git-owned across redeploys (a push
       # or the local worker advance may have created objects as `git`).
       chown -R git:git ${gitHome}
