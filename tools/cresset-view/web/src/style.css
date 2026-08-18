@@ -415,3 +415,16 @@ aside h2 strong { color: var(--muted); font: 500 10px/1.4 var(--mono); letter-sp
 /* A stack that has just been landed but is still listed, because the viewer reads a snapshot
    of the repository rather than the repository. Saying so beats a button that appears inert. */
 .revision-status.merged { color: var(--accent); border-left: 3px solid var(--accent); padding-left: 9px; }
+/* Rebase sits beside Merge and is offered only when main has moved. Styled as the secondary of
+   the pair: it is a step towards landing, not the landing itself. */
+.stack-rebase {
+  padding: 4px 12px;
+  font: 600 11px/1.4 var(--sans);
+  color: var(--text);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.stack-rebase:hover:not(:disabled) { border-color: var(--accent); }
+.stack-rebase:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.stack-rebase:disabled { opacity: .5; cursor: progress; }

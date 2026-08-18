@@ -111,6 +111,8 @@ interface ChangeSummary {
 interface Stack {
   bookmark: string;
   tip: string;
+  /// main has moved since this was pushed, so it cannot land until it is rebased.
+  behind_main: boolean;
   /// Oldest first: the order they would land in.
   changes: ChangeSummary[];
 }
@@ -295,6 +297,9 @@ let reviewAllApprovals: Approval[] = [];
 /// What was landed in this session, and is therefore expected to still be listed until the
 /// repository snapshot catches up. Cleared once it is genuinely gone.
 let justMerged: { bookmark: string; tip: string } | null = null;
+/// A stack rebased in this session. Its approvals are all for superseded commits now, which is
+/// correct and still surprising, so it is said rather than left to be noticed.
+let justRebased: string | null = null;
 /// Whether this instance can land a stack at all. False hides Merge rather than offering a
 /// button that answers "merging is not available on this instance".
 let reviewCanMerge = false;
@@ -645,6 +650,20 @@ async function loadReviewQueue(wanted: string | null = null) {
     if (!stillListed) justMerged = null;
   }
 
+  if (justRebased != null) {
+    const note = document.createElement('p');
+    note.className = 'revision-status merged';
+    // Two things are true at once here and both surprise people: the approvals are stale
+    // because the commit ids changed, and the queue still shows the OLD ids because the viewer
+    // reads a snapshot of the repository. On the box a push wakes the refresh within a couple
+    // of seconds; saying so beats a Rebase button that appears not to have done anything.
+    note.textContent = `Rebased ${justRebased} onto main. Every change in it has a new commit id,`
+      + ' so it needs approving again — an approval covers the exact version that was read.'
+      + ' The list below still shows the previous ids until the viewer refetches, a moment from now.';
+    revisionList.append(note);
+    justRebased = null;
+  }
+
   const open = response.stacks.reduce((total, stack) => total + stack.changes.length, 0);
   headCount.textContent = `${open} open`;
   if (open === 0) {
@@ -714,7 +733,8 @@ function approvalsOf(commitId: string): Approval[] {
 function renderStackHeader(stack: Stack): HTMLElement {
   const ready = stack.changes.filter((c) => approvalsOf(c.commit_id).length > 0).length;
   const total = stack.changes.length;
-  const mergeable = ready === total && stack.changes.every((c) => !c.has_conflict);
+  const mergeable =
+    ready === total && !stack.behind_main && stack.changes.every((c) => !c.has_conflict);
 
   const header = document.createElement('div');
   header.className = 'stack-header';
@@ -724,14 +744,50 @@ function renderStackHeader(stack: Stack): HTMLElement {
       <span class="stack-count">${ready} of ${total} approved</span>
     </div>
     ${!reviewCanMerge ? '' : `
+      ${!stack.behind_main ? '' : `
+        <button type="button" class="stack-rebase"
+                title="Move this stack onto the current main, keeping its change ids">
+          Rebase onto main
+        </button>`}
       <button type="button" class="stack-merge" ${mergeable ? '' : 'disabled'}
-              title="${mergeable ? `Land ${escapeHtml(short(stack.tip))} on main` : 'Every change in the stack must be approved first'}">
+              title="${mergeTitle(stack, mergeable, ready, total)}">
         Merge
       </button>`}
   `;
   header.querySelector<HTMLButtonElement>('.stack-merge')
     ?.addEventListener('click', (event) => void mergeStack(stack, event.currentTarget as HTMLButtonElement));
+  header.querySelector<HTMLButtonElement>('.stack-rebase')
+    ?.addEventListener('click', (event) => void rebaseStack(stack, event.currentTarget as HTMLButtonElement));
   return header;
+}
+
+/// Why Merge is disabled, in the order the reader has to fix them.
+function mergeTitle(stack: Stack, mergeable: boolean, ready: number, total: number): string {
+  if (mergeable) return `Land ${short(stack.tip)} on main`;
+  if (stack.behind_main) return 'main has moved; rebase this stack first';
+  if (ready < total) return 'Every change in the stack must be approved first';
+  return 'This stack has a conflict and cannot land';
+}
+
+async function rebaseStack(stack: Stack, button: HTMLButtonElement) {
+  const label = button.textContent ?? 'Rebase onto main';
+  button.disabled = true;
+  button.textContent = 'Rebasing…';
+  button.closest('.stack-header')?.querySelector('.stack-error')?.remove();
+  try {
+    await postJson<{ tip: string }>('/api/rebase', { bookmark: stack.bookmark });
+    // Every commit id in the stack has changed, so every approval on it is now for a version
+    // nobody is proposing. Reload rather than patch: the queue's approval marks are all stale.
+    justRebased = stack.bookmark;
+    await loadReviewQueue();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = label;
+    const message = document.createElement('pre');
+    message.className = 'stack-error';
+    message.textContent = error instanceof Error ? error.message : String(error);
+    button.closest('.stack-header')?.append(message);
+  }
 }
 
 async function mergeStack(stack: Stack, button: HTMLButtonElement) {

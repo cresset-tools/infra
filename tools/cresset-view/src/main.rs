@@ -75,6 +75,10 @@ struct Args {
     #[arg(long, default_value = "/var/lib/cresset-view/known_hosts")]
     known_hosts: PathBuf,
 
+    /// A scratch jj workspace for rebasing. Cloned on first use and reused after.
+    #[arg(long, default_value = "/var/lib/cresset-view/rebase")]
+    rebase_workspace: PathBuf,
+
     /// Where to project approvals for the canonical repository's push gate to read.
     ///
     /// Optional, and absent on any instance that is not the one beside the canonical repo. See
@@ -118,6 +122,11 @@ struct AppState {
 struct MergeConfig {
     remote: String,
     ssh_key: PathBuf,
+    /// A jj workspace this service may rewrite, used to rebase a stack onto main.
+    ///
+    /// Separate from the repository it serves, which stays read-only: rebasing writes commits,
+    /// and the thing being read must not be the thing being mutated underneath the reader.
+    scratch: PathBuf,
     /// Learned on first connect and kept, rather than disabling host key checking outright.
     /// The remote is the loopback address of this same machine, so the exposure is a host that
     /// already runs this service; recording the key still catches a later change.
@@ -216,6 +225,12 @@ struct Stack {
     bookmark: String,
     /// The commit landing this stack would move main to.
     tip: String,
+    /// Whether main has moved since this stack was pushed.
+    ///
+    /// Reported rather than left to be discovered at Merge, because it happens constantly — an
+    /// automated dependency bump or a release lands and every open stack is behind — and
+    /// finding out only when the button refuses is the friction this is meant to remove.
+    behind_main: bool,
     /// Oldest first: the order they would land in, and the order the gate reports them in.
     changes: Vec<ChangeSummary>,
 }
@@ -483,6 +498,7 @@ async fn main() -> Result<()> {
             (Some(remote), Some(ssh_key)) => Some(Arc::new(MergeConfig {
                 remote,
                 ssh_key,
+                scratch: args.rebase_workspace,
                 known_hosts: args.known_hosts,
             })),
             (None, None) => None,
@@ -520,6 +536,7 @@ async fn main() -> Result<()> {
         )
         .route("/api/approvals", get(all_approvals))
         .route("/api/merge", post(merge))
+        .route("/api/rebase", post(rebase))
         .route("/api/sync", get(sync_status))
         .route("/api/revisions/{id}/tree", get(tree))
         .route("/api/revisions/{id}/file", get(file))
@@ -866,6 +883,9 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
             }
         }
 
+        // main's head, for working out which stacks have fallen behind it.
+        let main_head = landed.first().cloned();
+
         // One revset per bookmark rather than one for all of them. Grouping after the fact
         // cannot say which stack a mid-stack commit belongs to, because the commit itself
         // carries no bookmark — the answer is which tip it is an ancestor of.
@@ -903,9 +923,23 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
                 // The bookmark has landed and not yet been deleted. Nothing to review.
                 continue;
             }
+            // Behind if main is not an ancestor of the tip. Computed from the snapshot, so it
+            // can lag by as long as a refresh; the authority is the push, which refuses either
+            // way. This only decides whether to OFFER the button.
+            let behind_main = !main_head.as_ref().is_some_and(|head| {
+                RevsetExpression::commits(vec![head.clone()])
+                    .ancestors()
+                    .intersection(&RevsetExpression::commits(vec![tip.clone()]).ancestors())
+                    .evaluate(repo)
+                    .ok()
+                    .and_then(|set| set.containing_fn()(head).ok())
+                    .unwrap_or(false)
+            });
+
             stacks.push(Stack {
                 bookmark,
                 tip: tip.hex(),
+                behind_main,
                 changes,
             });
         }
@@ -1236,16 +1270,207 @@ async fn merge(
     }))
 }
 
-fn push_to_main(repository: &Path, config: &MergeConfig, tip: &str) -> Result<String> {
-    // `-o IdentitiesOnly` so an agent or a stray key in the service's home cannot be used
-    // instead of the one deployment intends. `accept-new` records the host key on first use
-    // and refuses a later change, which is the useful half of strict checking for a loopback
-    // remote that is this same machine.
-    let ssh = format!(
+#[derive(Deserialize)]
+struct RebaseBody {
+    /// The review bookmark to move onto main. The whole stack it carries comes with it, which
+    /// is the point: a stack rebased piecemeal would be a stack half on each base.
+    bookmark: String,
+}
+
+#[derive(Serialize)]
+struct RebaseResponse {
+    bookmark: String,
+    /// The stack's new tip. Every commit id in the stack has changed, so every approval on it
+    /// is now for a version nobody is proposing.
+    tip: String,
+    output: String,
+}
+
+/// Rebase a review bookmark onto the current main and push it back.
+///
+/// This exists because main moves under changes constantly — an automated dependency bump or a
+/// release lands and every open change is suddenly behind. Doing it by hand is four jj commands
+/// and is the friction people actually feel.
+///
+/// **jj does the rebase, not git, and that is not a preference.** `git rebase` writes new commits
+/// without the `change-id` header, so it would destroy the identity every part of this system
+/// hangs off: the patch set refs, the comment anchors, the approvals. jj rewrites the commits and
+/// carries the change ids across, which is measurable — the ids before and after a rebase are the
+/// same, and there is a test that says so.
+async fn rebase(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<RebaseBody>,
+) -> Result<Json<RebaseResponse>, AppError> {
+    ensure_same_origin(&headers)?;
+    let Some(config) = state.merge.as_ref().cloned() else {
+        return Err(
+            anyhow!("rebasing is not available on this instance: no remote is configured").into(),
+        );
+    };
+    // The bookmark is interpolated into a revset and a refspec, so it is constrained rather than
+    // escaped: only what this system actually creates.
+    let bookmark = body.bookmark.trim().to_owned();
+    if !bookmark.starts_with("review/")
+        || !bookmark[7..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/')
+        || bookmark.len() > 200
+    {
+        return Err(anyhow!("only a review/* bookmark can be rebased").into());
+    }
+
+    tracing::info!(who = %identity.0, %bookmark, "rebasing onto main");
+    let outcome = tokio::task::spawn_blocking(move || rebase_onto_main(&config, &bookmark))
+        .await
+        .context("running the rebase")??;
+    Ok(Json(outcome))
+}
+
+fn rebase_onto_main(config: &MergeConfig, bookmark: &str) -> Result<RebaseResponse> {
+    let scratch = &config.scratch;
+    let ssh = ssh_command(config);
+
+    // jj needs a config it can read AND a place to put a per-repo one. `JJ_CONFIG=/dev/null`
+    // seemed like the obvious "no configuration" answer and is not: jj then tries to generate a
+    // per-repo config, fails, and the clone exits non-zero with a message that reads like a
+    // warning. It also needs an identity, because a rebase rewrites commits and stamps a
+    // committer — the author of each commit is preserved, only the committer is this service.
+    let config_file = scratch.with_extension("toml");
+    if !config_file.exists() {
+        if let Some(parent) = config_file.parent() {
+            std::fs::create_dir_all(parent).context("creating the rebase workspace directory")?;
+        }
+        std::fs::write(
+            &config_file,
+            "[user]\nname = \"cresset-view\"\nemail = \"cresset-view@cresset.tools\"\n",
+        )
+        .context("writing the rebase workspace config")?;
+    }
+    // HOME is the PARENT, not the workspace. jj writes into HOME before it clones, so pointing
+    // it at the clone target makes the target non-empty and the clone then fails with
+    // "Destination path exists and is not an empty directory" — which names the symptom and not
+    // the cause, and cost a debugging round.
+    let home = config_file
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    let config_file = config_file.to_string_lossy().into_owned();
+
+    // A jj command in the scratch workspace. `--ignore-working-copy` throughout: this workspace
+    // has no working copy anyone edits, and letting jj snapshot one would make the result depend
+    // on leftover files from a previous run.
+    let jj = |args: &[&str]| -> Result<String> {
+        let output = std::process::Command::new("jj")
+            .arg("-R")
+            .arg(scratch)
+            .arg("--ignore-working-copy")
+            .args(args)
+            .env("GIT_SSH_COMMAND", &ssh)
+            .env("JJ_CONFIG", &config_file)
+            .env("HOME", &home)
+            .output()
+            .with_context(|| format!("running jj {}", args.join(" ")))?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        if output.status.success() {
+            Ok(text.trim().to_owned())
+        } else {
+            Err(anyhow!("jj {}: {}", args.join(" "), text.trim()))
+        }
+    };
+
+    if !scratch.join(".jj").exists() {
+        // First use. Cloned rather than shipped, so a lost or corrupted workspace repairs itself
+        // instead of needing someone to notice. The directory is deliberately NOT created here:
+        // jj clone refuses a destination that is not empty, and creating it is exactly how the
+        // HOME mistake above manifested.
+        let output = std::process::Command::new("jj")
+            .args(["git", "clone", "--colocate", &config.remote])
+            .arg(scratch)
+            .env("GIT_SSH_COMMAND", &ssh)
+            .env("JJ_CONFIG", &config_file)
+            .env("HOME", &home)
+            .output()
+            .context("cloning the rebase workspace")?;
+        if !output.status.success() {
+            bail!(
+                "could not create the rebase workspace: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+    }
+
+    jj(&["git", "fetch"])?;
+
+    // A clone tracks only the default branch, so every review bookmark arrives as
+    // `review/x@origin` with no local counterpart — and both `rebase -b` and `git push -b` want
+    // the local name. Tracking creates it. Already-tracked is not an error worth stopping for,
+    // which is the normal case from the second rebase onwards.
+    let remote_bookmark = format!("{bookmark}@origin");
+    let _ = jj(&["bookmark", "track", &remote_bookmark]);
+
+    // `-b` rebases the whole branch the bookmark carries — every commit on it that main does not
+    // already have. Rebasing only the tip would leave a stack straddling two bases.
+    let rebased = jj(&["rebase", "-b", bookmark, "-d", "main@origin"])?;
+
+    // jj records a conflict IN the commit rather than failing, so a zero exit status here means
+    // nothing about whether the result is usable. Checked explicitly, and undone if it is not:
+    // pushing a conflicted stack would put jj's marker encoding in front of a reviewer as though
+    // someone had written it.
+    let conflicted = jj(&[
+        "log",
+        "-r",
+        "conflicts()",
+        "--no-graph",
+        "-T",
+        "commit_id.short()",
+    ])?;
+    if !conflicted.trim().is_empty() {
+        // `undo` reverses the rebase operation. The workspace is left as it was, so a failed
+        // rebase costs nothing and can be retried after the conflict is resolved by hand.
+        let _ = jj(&["undo"]);
+        bail!(
+            "this change conflicts with main and cannot be rebased automatically.\n\n\
+             The conflict has to be resolved by hand, in a workspace:\n\n\
+             \u{20}   jj git fetch\n\
+             \u{20}   jj rebase -b {bookmark} -d 'main@origin'\n\
+             \u{20}   # resolve, then\n\
+             \u{20}   jj git push -b {bookmark}\n\n\
+             Nothing has been changed here: the rebase was undone."
+        );
+    }
+
+    let tip = jj(&["log", "-r", bookmark, "--no-graph", "-T", "commit_id"])?;
+    let pushed = jj(&["git", "push", "-b", bookmark])?;
+
+    Ok(RebaseResponse {
+        bookmark: bookmark.to_owned(),
+        tip,
+        output: format!("{rebased}\n{pushed}").trim().to_owned(),
+    })
+}
+
+/// The ssh invocation used for every git and jj network call this service makes.
+///
+/// `-o IdentitiesOnly` so an agent or a stray key in the service's home cannot be used instead
+/// of the one deployment intends. `accept-new` records the host key on first use and refuses a
+/// later change, which is the useful half of strict checking for a loopback remote that is this
+/// same machine.
+fn ssh_command(config: &MergeConfig) -> String {
+    format!(
         "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={} -o BatchMode=yes",
         config.ssh_key.display(),
         config.known_hosts.display(),
-    );
+    )
+}
+
+fn push_to_main(repository: &Path, config: &MergeConfig, tip: &str) -> Result<String> {
+    let ssh = ssh_command(config);
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(repository)

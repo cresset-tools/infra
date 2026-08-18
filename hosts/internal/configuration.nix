@@ -230,7 +230,10 @@ in
     # Landing a stack shells out to `git push` over ssh. The service read the repository
     # through jj-lib and needed neither binary until the Merge button existed; without them
     # the endpoint failed with "spawning git push", which named the call and not the cause.
-    path = [ pkgs.git pkgs.openssh ];
+    # git and ssh for the merge push; jj for the rebase. jj specifically, and not `git rebase`:
+    # git would write the rebased commits WITHOUT the change-id header, destroying the identity
+    # the patch set refs, comment anchors and approvals all hang off.
+    path = [ pkgs.git pkgs.openssh pkgs.jujutsu ];
     unitConfig.ConditionPathExists = "/var/lib/cresset-view/repository/current/.jj";
     environment.RUST_LOG = "cresset_view=info,tower_http=info";
     # RequiresMountsFor is a [Unit] directive. It sat in serviceConfig until systemd was

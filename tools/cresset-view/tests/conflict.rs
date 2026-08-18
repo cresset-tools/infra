@@ -1099,6 +1099,174 @@ fn a_change_left_behind_by_main_is_told_to_rebase() {
     );
 }
 
+/// Rebasing carries the change ids across, and pushes the whole stack.
+///
+/// The change id surviving is the property everything else here hangs off: the patch set refs,
+/// the comment anchors, the approvals. `git rebase` would write new commits WITHOUT the
+/// change-id header and silently destroy all of it, which is why jj does the rebase. This test
+/// is what says so out loud.
+#[test]
+fn rebasing_moves_the_stack_and_keeps_its_change_ids() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, before) = review_repo(dir.path());
+    let bare = dir.path().join("canonical.git");
+    let work = dir.path().join("work");
+
+    // Main moves underneath, as an automated import or a release does.
+    jj(
+        &work,
+        &["new", "main", "-m", "landed while the change was open"],
+    );
+    std::fs::write(work.join("landed.txt"), "meanwhile\n").expect("write");
+    jj(&work, &["bookmark", "set", "main", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "main"]);
+
+    let server = Server::start_with(
+        &dir.path().join("viewer"),
+        &[
+            "--review-db",
+            dir.path().join("review.db").to_str().unwrap(),
+            "--merge-remote",
+            bare.to_str().unwrap(),
+            "--merge-ssh-key",
+            "/dev/null",
+            "--rebase-workspace",
+            dir.path().join("rebase").to_str().unwrap(),
+        ],
+    );
+
+    let (status, body) = server.post("/api/rebase", r#"{"bookmark":"review/thing"}"#, &[]);
+    assert_eq!(status, 200, "the rebase must succeed: {body}");
+    let body: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    let after = body["tip"].as_str().expect("a tip").to_string();
+    assert_ne!(after, before, "the rebase must produce a new commit");
+
+    // The remote bookmark moved to it, and the change id is the SAME one.
+    let head = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["rev-parse", "refs/heads/review/thing"])
+        .output()
+        .expect("rev-parse");
+    assert_eq!(
+        String::from_utf8_lossy(&head.stdout).trim(),
+        after,
+        "the review bookmark on the remote moved to the rebased tip"
+    );
+    let header = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["cat-file", "commit", &after])
+        .output()
+        .expect("cat-file");
+    let header = String::from_utf8_lossy(&header.stdout);
+    let rebased_change = header
+        .lines()
+        .find_map(|line| line.strip_prefix("change-id "))
+        .expect("the rebased commit must still carry a change-id header");
+    assert_eq!(
+        rebased_change, change,
+        "the change id must survive the rebase, or every patch set ref, comment anchor and \
+         approval pointing at this change is orphaned"
+    );
+
+    // And it is genuinely on top of the new main now.
+    let merge_base = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["merge-base", "--is-ancestor", "refs/heads/main", &after])
+        .status()
+        .expect("merge-base");
+    assert!(
+        merge_base.success(),
+        "main must be an ancestor of the rebased stack"
+    );
+}
+
+/// A rebase that conflicts changes nothing and says what to do.
+///
+/// jj records a conflict IN the commit instead of failing, so the exit status says nothing about
+/// whether the result is usable. Without the explicit check this would push jj's marker encoding
+/// to the review branch and show it to a reviewer as though a person had written it.
+#[test]
+fn a_conflicting_rebase_is_undone_rather_than_pushed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_change, before) = review_repo(dir.path());
+    let bare = dir.path().join("canonical.git");
+    let work = dir.path().join("work");
+
+    // review/thing wrote g.txt = "one". Land a different g.txt on main, so rebasing conflicts.
+    jj(&work, &["new", "main", "-m", "conflicting change on main"]);
+    std::fs::write(work.join("g.txt"), "something else entirely\n").expect("write");
+    jj(&work, &["bookmark", "set", "main", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "main"]);
+
+    let server = Server::start_with(
+        &dir.path().join("viewer"),
+        &[
+            "--review-db",
+            dir.path().join("review.db").to_str().unwrap(),
+            "--merge-remote",
+            bare.to_str().unwrap(),
+            "--merge-ssh-key",
+            "/dev/null",
+            "--rebase-workspace",
+            dir.path().join("rebase").to_str().unwrap(),
+        ],
+    );
+
+    let (status, message) = server.post("/api/rebase", r#"{"bookmark":"review/thing"}"#, &[]);
+    assert_eq!(
+        status, 400,
+        "a conflicting rebase must not succeed: {message}"
+    );
+    assert!(
+        message.contains("conflicts with main"),
+        "it must say what is wrong: {message}"
+    );
+    assert!(
+        message.contains("undone"),
+        "and that nothing was changed: {message}"
+    );
+
+    // The review bookmark on the remote is untouched.
+    let head = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["rev-parse", "refs/heads/review/thing"])
+        .output()
+        .expect("rev-parse");
+    assert_eq!(
+        String::from_utf8_lossy(&head.stdout).trim(),
+        before,
+        "a conflicting rebase must leave the review branch exactly where it was"
+    );
+}
+
+/// Only a review bookmark can be rebased.
+#[test]
+fn rebase_refuses_anything_that_is_not_a_review_bookmark() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_change, _commit) = review_repo(dir.path());
+    let server = Server::start_with(
+        &dir.path().join("viewer"),
+        &[
+            "--merge-remote",
+            dir.path().join("canonical.git").to_str().unwrap(),
+            "--merge-ssh-key",
+            "/dev/null",
+        ],
+    );
+    for bookmark in ["main", "review/x; rm -rf /", "../../etc"] {
+        let (status, message) = server.post(
+            "/api/rebase",
+            &format!(r#"{{"bookmark":{bookmark:?}}}"#),
+            &[],
+        );
+        assert_eq!(status, 400, "{bookmark:?} must be refused: {message}");
+    }
+}
+
 /// An instance with no merge remote says so rather than failing obscurely.
 #[test]
 fn an_instance_that_cannot_merge_explains_itself() {
