@@ -24,6 +24,12 @@ set -eu
 # latter. `|| true` because a viewer that is a little stale is not a reason to reject a push.
 touch /srv/git/.refresh-requested 2>/dev/null || true
 
+# Whether this push touched a review bookmark, decided inside the loop below.
+#
+# post-receive takes its refs on STDIN, NOT as arguments — `$1` is empty here, unlike in the
+# update hook next door. Testing `$1` looked right and would have meant this never fired once.
+submit_wanted=no
+
 while read -r _old new ref; do
   case "$ref" in
     refs/heads/review/*) ;;
@@ -39,6 +45,11 @@ while read -r _old new ref; do
   if [ "$new" = "0000000000000000000000000000000000000000" ]; then
     continue
   fi
+
+  # Past the deletion guard, so removing a landed bookmark does not trigger a GitHub round trip
+  # that has nothing to do. (When cleanup exists, a deletion is exactly when it should fire —
+  # that will be its own signal rather than this one.)
+  submit_wanted=yes
 
   # Commits carried by this bookmark that have not landed. `--not refs/heads/main` is what
   # makes a stack of five commits record five changes rather than the whole history.
@@ -69,3 +80,17 @@ while read -r _old new ref; do
     echo "recorded patch set $n of change $cid ($(git rev-parse --short "$sha"))"
   done
 done
+
+# Ask for these changes to be submitted to the projects they affect, so their CI runs on them.
+#
+# A second sentinel rather than reusing the refresh one: refreshing the viewer is cheap and
+# wanted after every push, while submitting talks to GitHub and is wanted only for review
+# bookmarks. One file would make a push to main open pull requests it has no business opening.
+#
+# It carries no bookmark name, deliberately: `cresset-sync submit` with no revision covers every
+# open review bookmark. That is idempotent — an unchanged branch force-pushes to the same commit
+# and finds the same pull request — and self-healing, so anything an earlier failure left behind
+# is picked up on the next push by anyone.
+if [ "$submit_wanted" = yes ]; then
+  touch /srv/git/.submit-requested 2>/dev/null || true
+fi

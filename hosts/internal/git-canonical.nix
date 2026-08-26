@@ -191,6 +191,10 @@ in
       # before the first push: systemd's PathModified watches a path, and a file that has never
       # existed makes the first push the one that goes unnoticed.
       install -o git -g git -m 0644 /dev/null ${gitHome}/.refresh-requested
+      # And the one that asks for a change to be submitted to the projects it affects. Created
+      # here for the same reason: systemd watches a path, and a file that has never existed
+      # makes the first push after a deploy the one nothing hears.
+      install -o git -g git -m 0644 /dev/null ${gitHome}/.submit-requested
 
       # Belt-and-braces: keep the whole tree git-owned across redeploys (a push
       # or the local worker advance may have created objects as `git`).

@@ -415,7 +415,59 @@ in
   # Daily, because the observed leak rate filled 20G in about a week. This treats the symptom;
   # the exporter should be fetching only the mapped subtree rather than whole commits, which
   # is a change to make deliberately rather than during an outage.
-    # Read back what CI said about every change under review, into the file cresset-view reads.
+    # Submit changes under review to the projects they affect, when a review bookmark is pushed.
+  #
+  # hooks/post-receive touches the sentinel as the `git` user; this runs as cresset-sync, which
+  # holds the GitHub credentials. Neither account gains anything from the other — the escalation
+  # is systemd's, exactly as for the viewer refresh next door.
+  #
+  # THIS IS THE STEP THAT MAKES UNREVIEWED WORK PUBLIC. It projects the mapped subtree of each
+  # change into the repositories that change touches and opens a draft pull request there, so
+  # their CI runs on it before it lands. The publication boundary is the same projection the
+  # export uses: nothing outside a mapped path can cross, which is what keeps docs/planning
+  # private here as much as on main.
+  systemd.services.cresset-sync-submit = {
+    description = "Publish changes under review to the projects they affect";
+    after = [ "srv.mount" ];
+    unitConfig.RequiresMountsFor = "/srv";
+    path = [ pkgs.git pkgs.jujutsu ];
+    serviceConfig = {
+      Type = "oneshot";
+      User = "cresset-sync";
+      Group = "cresset-sync";
+      EnvironmentFile = config.sops.templates."cresset-sync.env".path;
+      ExecStart = "${cresset-sync}/bin/cresset-sync --repo-root /srv/sync/jj-workspace --db /srv/sync/state.db submit --apply";
+    };
+  };
+
+  systemd.paths.cresset-sync-submit = {
+    description = "Submit a change as soon as its review bookmark is pushed";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "srv.mount" ];
+    unitConfig.RequiresMountsFor = "/srv";
+    pathConfig = {
+      # PathModified, not PathChanged: `touch` on an existing file is a write-and-close, which
+      # PathChanged does not report. The same distinction that made the viewer refresh work.
+      PathModified = "/srv/git/.submit-requested";
+      Unit = "cresset-sync-submit.service";
+    };
+  };
+
+  # A net under the hook, not a substitute for it. The hook covers pushes; this covers a pass
+  # that failed, a GitHub outage, and the window where credentials were missing. Ten minutes
+  # rather than two: submitting talks to GitHub for every open change, and nothing here is
+  # urgent once the push-driven path has run.
+  systemd.timers.cresset-sync-submit = {
+    description = "Catch up anything the push hook did not manage to submit";
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = "*:0/10";
+      Persistent = true;
+      RandomizedDelaySec = "60s";
+    };
+  };
+
+  # Read back what CI said about every change under review, into the file cresset-view reads.
   #
   # A file rather than a GitHub call from the viewer: cresset-view is reachable from a browser
   # and holds no GitHub credentials, and should not. The worker already has a token, so it is
