@@ -94,6 +94,16 @@ interface FileResponse {
   conflict?: ConflictView;
 }
 
+/// What CI said about a change in one downstream project.
+interface ProjectChecks {
+  github: string;
+  pull_request: number;
+  pull_request_url: string;
+  head: string;
+  rollup: 'passing' | 'failing' | 'pending' | 'none';
+  notable?: Array<{ name: string; status: string; conclusion?: string; url?: string }>;
+}
+
 interface ChangeSummary {
   change_id: string;
   commit_id: string;
@@ -102,6 +112,8 @@ interface ChangeSummary {
   authored_at: string;
   patch_sets: number;
   has_conflict: boolean;
+  /// Absent when nothing has been reported, which is NOT the same as failing.
+  checks?: ProjectChecks[];
 }
 
 /// One review bookmark and the changes it carries — Gerrit's relation chain.
@@ -693,6 +705,7 @@ async function loadReviewQueue(wanted: string | null = null) {
           <small>${escapeHtml(change.author_name)} · ${formatDateTime(change.authored_at)}</small>
           <span class="signals">
             <em class="${approved ? 'approved' : 'needs-review'}">${approved ? 'approved' : 'needs review'}</em>
+            ${renderChecks(change)}
             <em class="${change.patch_sets > 1 ? 'revised' : ''}">${change.patch_sets} patch set${change.patch_sets === 1 ? '' : 's'}</em>
             ${change.has_conflict ? '<em class="warning">conflict</em>' : ''}
           </span>
@@ -733,8 +746,17 @@ function approvalsOf(commitId: string): Approval[] {
 function renderStackHeader(stack: Stack): HTMLElement {
   const ready = stack.changes.filter((c) => approvalsOf(c.commit_id).length > 0).length;
   const total = stack.changes.length;
+  // CI blocks landing, and "nothing reported" does not. A project with no CI must not become
+  // unmergeable, and a snapshot that has not been written yet must not either — so only an
+  // actual failing or unfinished check stands in the way.
+  const blockingChecks = stack.changes.flatMap((change) =>
+    (change.checks ?? []).filter((check) => check.rollup === 'failing' || check.rollup === 'pending'),
+  );
   const mergeable =
-    ready === total && !stack.behind_main && stack.changes.every((c) => !c.has_conflict);
+    ready === total
+    && !stack.behind_main
+    && blockingChecks.length === 0
+    && stack.changes.every((c) => !c.has_conflict);
 
   const header = document.createElement('div');
   header.className = 'stack-header';
@@ -766,7 +788,34 @@ function mergeTitle(stack: Stack, mergeable: boolean, ready: number, total: numb
   if (mergeable) return `Land ${short(stack.tip)} on main`;
   if (stack.behind_main) return 'main has moved; rebase this stack first';
   if (ready < total) return 'Every change in the stack must be approved first';
+  const checks = stack.changes.flatMap((change) => change.checks ?? []);
+  if (checks.some((check) => check.rollup === 'failing')) return 'CI is failing on this stack';
+  if (checks.some((check) => check.rollup === 'pending')) return 'CI has not finished yet';
   return 'This stack has a conflict and cannot land';
+}
+
+/// A change's CI state, as one word plus a link to what is wrong.
+///
+/// Only rendered when there is something to say. A change with no checks shows nothing rather
+/// than "no checks", which would read as a problem in the many projects that have no CI.
+function renderChecks(change: ChangeSummary): string {
+  const checks = change.checks ?? [];
+  if (checks.length === 0) return '';
+  const worst = checks.some((c) => c.rollup === 'failing')
+    ? 'failing'
+    : checks.some((c) => c.rollup === 'pending')
+      ? 'pending'
+      : checks.some((c) => c.rollup === 'passing')
+        ? 'passing'
+        : 'none';
+  if (worst === 'none') return '';
+  const label = { passing: 'CI green', failing: 'CI failing', pending: 'CI running' }[worst];
+  // Link to the pull request that is unhappy, not just to the state: the reader's next move is
+  // to look at it, and hunting for which of several projects failed is friction.
+  const target = checks.find((c) => c.rollup === worst);
+  return `<a class="check ${worst}" href="${escapeHtml(target?.pull_request_url ?? '#')}"
+             target="_blank" rel="noreferrer noopener"
+             title="${escapeHtml(target?.github ?? '')} #${target?.pull_request ?? ''}">${label}</a>`;
 }
 
 async function rebaseStack(stack: Stack, button: HTMLButtonElement) {

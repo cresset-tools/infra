@@ -79,6 +79,14 @@ struct Args {
     #[arg(long, default_value = "/var/lib/cresset-view/rebase")]
     rebase_workspace: PathBuf,
 
+    /// What CI said, as written by `cresset-sync checks`.
+    ///
+    /// A file rather than a GitHub call: this service holds no GitHub credentials and should
+    /// not, being reachable from a browser. Absent means checks are simply not reported —
+    /// never that they failed.
+    #[arg(long, env = "CRESSET_VIEW_CHECKS_FILE")]
+    checks_file: Option<PathBuf>,
+
     /// Where to project approvals for the canonical repository's push gate to read.
     ///
     /// Optional, and absent on any instance that is not the one beside the canonical repo. See
@@ -114,7 +122,44 @@ struct AppState {
     sync_db: Option<Arc<PathBuf>>,
     review_db: Option<Arc<PathBuf>>,
     approvals_file: Option<Arc<PathBuf>>,
+    checks_file: Option<Arc<PathBuf>>,
     merge: Option<Arc<MergeConfig>>,
+}
+
+/// What CI said about one change in one downstream project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectChecks {
+    github: String,
+    pull_request: u64,
+    pull_request_url: String,
+    head: String,
+    /// `passing`, `failing`, `pending` or `none`.
+    rollup: String,
+    #[serde(default)]
+    notable: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ChecksSnapshot {
+    #[serde(default)]
+    generated_at: i64,
+    #[serde(default)]
+    changes: std::collections::BTreeMap<String, Vec<ProjectChecks>>,
+}
+
+/// Read the snapshot, or an empty one.
+///
+/// Every failure here — absent, unreadable, malformed — is "nothing to report", never "failed".
+/// The snapshot is written by another process on a timer, so a missing one usually means it has
+/// not run yet, and turning that into a merge refusal would block work on a file's absence.
+fn read_checks(state: &AppState) -> ChecksSnapshot {
+    let Some(path) = state.checks_file.as_ref() else {
+        return ChecksSnapshot::default();
+    };
+    std::fs::read(path.as_ref())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
 }
 
 /// What is needed to land a stack. Both halves or neither: a remote with no key cannot
@@ -211,6 +256,10 @@ struct ChangeSummary {
     /// How many versions have been pushed. 1 means it has not been revised yet.
     patch_sets: usize,
     has_conflict: bool,
+    /// What CI said, per downstream project this change was submitted to. Empty means nothing
+    /// has been reported — which is not the same as failing, and the gate treats it that way.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    checks: Vec<ProjectChecks>,
 }
 
 /// One review bookmark and the changes it carries, which is Gerrit's relation chain.
@@ -494,6 +543,7 @@ async fn main() -> Result<()> {
         sync_db: args.sync_db.map(Arc::new),
         review_db: args.review_db.map(Arc::new),
         approvals_file: args.approvals_file.map(Arc::new),
+        checks_file: args.checks_file.map(Arc::new),
         merge: match (args.merge_remote, args.merge_ssh_key) {
             (Some(remote), Some(ssh_key)) => Some(Arc::new(MergeConfig {
                 remote,
@@ -846,6 +896,10 @@ fn commit_matches(commit: &Commit, needle: &str) -> bool {
 /// there is no status column to fall out of step with the repository. Landing a change makes
 /// it disappear from here because it becomes an ancestor of `main`, with nothing to update.
 async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>, AppError> {
+    // Read once for the whole queue rather than per change: it is one small file, and reading
+    // it inside the loop would let a rewrite land halfway through and report two different
+    // moments in one response.
+    let snapshot = read_checks(&state);
     let path = state.repository.as_ref().clone();
     let response = run_jj(move || async move {
         let loaded = load_repository(&path).await?;
@@ -906,6 +960,11 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
             for commit in commits {
                 let change_id = commit.change_id().reverse_hex();
                 let patch_sets = read_patch_sets(repo, &change_id)?.len();
+                let checks = snapshot
+                    .changes
+                    .get(&change_id)
+                    .cloned()
+                    .unwrap_or_default();
                 changes.push(ChangeSummary {
                     change_id,
                     commit_id: commit.id().hex(),
@@ -914,6 +973,7 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
                     authored_at: commit.author().timestamp.to_datetime()?.to_rfc3339(),
                     patch_sets,
                     has_conflict: commit.has_conflict(),
+                    checks,
                 });
             }
             // The revset streams newest first; landing order is the opposite, and the gate

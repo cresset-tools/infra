@@ -256,7 +256,7 @@ in
       # holds it, and that is deliberately survivable rather than fatal. If it proves flaky in
       # practice, the fix is for the worker to write a small JSON snapshot after each pass and
       # for this to read that instead — a plain file read has none of these problems.
-      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080 --sync-db /srv/sync/state.db --review-db /var/lib/cresset-view/review.db --approvals-file /var/lib/cresset-review/approved --merge-remote git@localhost:cresset.git --merge-ssh-key ${config.sops.secrets."cresset_view/merge_ssh_key".path}";
+      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080 --sync-db /srv/sync/state.db --review-db /var/lib/cresset-view/review.db --approvals-file /var/lib/cresset-review/approved --checks-file /var/lib/cresset-review/checks.json --merge-remote git@localhost:cresset.git --merge-ssh-key ${config.sops.secrets."cresset_view/merge_ssh_key".path}";
       Restart = "on-failure";
       RestartSec = "3s";
       NoNewPrivileges = true;

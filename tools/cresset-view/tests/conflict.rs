@@ -1267,6 +1267,78 @@ fn rebase_refuses_anything_that_is_not_a_review_bookmark() {
     }
 }
 
+/// A failing check reaches the queue; an absent one is silence, not failure.
+///
+/// The asymmetry is the whole design. Many of these projects have no CI at all, and the
+/// snapshot is written by another process on a timer — so "nothing reported" must never block a
+/// landing, while an actual red check must.
+#[test]
+fn checks_are_reported_and_an_absent_snapshot_is_not_a_failure() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, _commit) = review_repo(dir.path());
+    let viewer = dir.path().join("viewer");
+    let checks = dir.path().join("checks.json");
+
+    // No snapshot at all: the queue still serves, and reports nothing about CI.
+    let server = Server::start_with(&viewer, &["--checks-file", checks.to_str().unwrap()]);
+    let body = server.get("/api/changes").expect("queue served with no snapshot");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    assert!(
+        value["stacks"][0]["changes"][0].get("checks").is_none(),
+        "an absent snapshot reports nothing, rather than a failure: {value}"
+    );
+    drop(server);
+
+    // Now a snapshot saying CI failed.
+    std::fs::write(
+        &checks,
+        format!(
+            r#"{{"generated_at":1,"changes":{{"{change}":[{{
+                 "github":"cresset-tools/x","pull_request":109,
+                 "pull_request_url":"https://github.com/cresset-tools/x/pull/109",
+                 "head":"abc123","rollup":"failing",
+                 "notable":[{{"name":"build","status":"completed","conclusion":"failure"}}]}}]}}}}"#
+        ),
+    )
+    .expect("write snapshot");
+
+    let server = Server::start_with(&viewer, &["--checks-file", checks.to_str().unwrap()]);
+    let body = server.get("/api/changes").expect("queue served");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    let reported = &value["stacks"][0]["changes"][0]["checks"][0];
+    assert_eq!(reported["rollup"], "failing", "the failure must reach the queue: {value}");
+    assert_eq!(reported["pull_request"], 109);
+    assert_eq!(
+        reported["pull_request_url"], "https://github.com/cresset-tools/x/pull/109",
+        "and carry a link, because the reader's next move is to look at it"
+    );
+}
+
+/// A malformed snapshot is silence, not a failure.
+///
+/// It is rewritten by another process while this one reads it. A half-written file must not
+/// become a merge refusal — it is a moment, not a verdict.
+#[test]
+fn a_corrupt_checks_snapshot_reports_nothing_rather_than_failing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_change, _commit) = review_repo(dir.path());
+    let checks = dir.path().join("checks.json");
+    std::fs::write(&checks, "{\"changes\": {\"half").expect("write");
+
+    let server = Server::start_with(
+        &dir.path().join("viewer"),
+        &["--checks-file", checks.to_str().unwrap()],
+    );
+    let body = server
+        .get("/api/changes")
+        .expect("a corrupt snapshot must not break the queue");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    assert!(
+        value["stacks"][0]["changes"][0].get("checks").is_none(),
+        "nothing reported: {value}"
+    );
+}
+
 /// An instance with no merge remote says so rather than failing obscurely.
 #[test]
 fn an_instance_that_cannot_merge_explains_itself() {

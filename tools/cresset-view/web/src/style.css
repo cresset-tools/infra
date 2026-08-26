@@ -428,3 +428,10 @@ aside h2 strong { color: var(--muted); font: 500 10px/1.4 var(--mono); letter-sp
 .stack-rebase:hover:not(:disabled) { border-color: var(--accent); }
 .stack-rebase:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .stack-rebase:disabled { opacity: .5; cursor: progress; }
+/* CI state on a change. A link, because the reader's next move is to look at the run — and to
+   the pull request that is unhappy specifically, not to a list of them. */
+.check { padding: 2px 7px; font: 500 9px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; text-decoration: none; border: 1px solid; }
+.check.passing { color: var(--accent); border-color: var(--accent); }
+.check.failing { color: var(--warning-text); background: var(--warning-bg); border-color: var(--attention); }
+.check.pending { color: var(--muted); border-color: var(--border-soft); }
+.check:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

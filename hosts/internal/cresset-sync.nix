@@ -415,7 +415,43 @@ in
   # Daily, because the observed leak rate filled 20G in about a week. This treats the symptom;
   # the exporter should be fetching only the mapped subtree rather than whole commits, which
   # is a change to make deliberately rather than during an outage.
-  systemd.services.cresset-sync-gc = {
+    # Read back what CI said about every change under review, into the file cresset-view reads.
+  #
+  # A file rather than a GitHub call from the viewer: cresset-view is reachable from a browser
+  # and holds no GitHub credentials, and should not. The worker already has a token, so it is
+  # what asks. Same direction of travel as the approvals file, opposite way round.
+  #
+  # Every two minutes: a check that has just gone red should stop a landing quickly, and a
+  # matrix that takes twenty minutes does not need asking about more often than that.
+  systemd.services.cresset-sync-checks = {
+    description = "Read CI status for changes under review into the viewer's snapshot";
+    after = [ "srv.mount" ];
+    unitConfig.RequiresMountsFor = "/srv";
+    path = [ pkgs.git pkgs.jujutsu ];
+    serviceConfig = {
+      Type = "oneshot";
+      User = "cresset-sync";
+      Group = "cresset-sync";
+      EnvironmentFile = config.sops.templates."cresset-sync.env".path;
+      # The snapshot lives beside the approvals file, in the directory cresset-view already
+      # reads. cresset-sync writes it; the setgid bit on that directory is what makes it
+      # readable by the other side.
+      ReadWritePaths = [ "/var/lib/cresset-review" ];
+      ExecStart = "${cresset-sync}/bin/cresset-sync --repo-root /srv/sync/jj-workspace --db /srv/sync/state.db checks --out /var/lib/cresset-review/checks.json";
+    };
+  };
+
+  systemd.timers.cresset-sync-checks = {
+    description = "Keep the CI snapshot within a couple of minutes of GitHub";
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = "*:0/2";
+      Persistent = true;
+      RandomizedDelaySec = "20s";
+    };
+  };
+
+systemd.services.cresset-sync-gc = {
     description = "Garbage-collect the cresset-sync downstream mirrors";
     after = [ "srv.mount" ];
     requires = [ "cresset-sync-setup.service" ];
