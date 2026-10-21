@@ -73,12 +73,44 @@
       system = "x86_64-linux";
       # Overlay nixpkgs so `pkgs.nix` (and anything built against it, e.g.
       # nixos-rebuild) is Determinate Nix rather than upstream Nix.
+      # PHP 8.4.27 (security release, 2026-10-21) ahead of nixpkgs, which
+      # still ships 8.4.26. `override` threads version/phpSrc through every
+      # derived build — pkgs.php, buildEnv (demo's phpRuntime), and
+      # FrankenPHP's own embed+ZTS rebuild (origin's mageos-maker). Hash is
+      # php.net's published sha256 for php-8.4.27.tar.bz2. Drop this once
+      # the nixpkgs pin carries >= 8.4.27.
+      #
+      # 8.4.27 adds ext/filter/tests/oom_*.phpt, which spawn `php-cgi -n`.
+      # nixpkgs builds filter as a shared extension and run-tests only loads
+      # it into the CLI, so the ini-less CGI child has no filter_input() and
+      # the expected OOM never happens. Packaging artifact, not a PHP bug.
+      #
+      # They are dropped from the *source* rather than via packageOverrides:
+      # the wrapper's extension set closes over the packageOverrides of the
+      # original nixpkgs call, so `.override` cannot reach it. Every
+      # extension builds from `php.unwrapped.src`, and phpSrc does pass
+      # through `.override` (including FrankenPHP's), so this is the one
+      # place that covers them all.
+      phpOverlay = final: prev: {
+        php84 = prev.php84.override {
+          version = "8.4.27";
+          phpSrc = prev.runCommand "php-8.4.27.tar.bz2" { } ''
+            tar xjf ${prev.fetchurl {
+              url = "https://www.php.net/distributions/php-8.4.27.tar.bz2";
+              hash = "sha256-slMKh3xyL0sIyeF0owywi6wrfhkD7m6eMV8KqfX4LCQ=";
+            }}
+            rm php-8.4.27/ext/filter/tests/oom_*.phpt
+            tar cjf $out php-8.4.27
+          '';
+        };
+      };
       pkgs = import nixpkgs {
         inherit system;
         overlays = [
           (final: prev: {
             nix = determinate.inputs.nix.packages.${system}.default;
           })
+          phpOverlay
         ];
       };
       # The flakeref the deploy/switch apps hand to nixos-anywhere/nixos-rebuild.
@@ -133,7 +165,10 @@
           # modules — hosts/demo needs inputs.sops-nix + the image packages.
           specialArgs = { inherit inputs; };
           modules =
-            [ (hostDir + "/configuration.nix") ]
+            [
+              (hostDir + "/configuration.nix")
+              { nixpkgs.overlays = [ phpOverlay ]; }
+            ]
             ++ nixpkgs.lib.optionals hasDisko [
               disko.nixosModules.disko
               (hostDir + "/disko.nix")
