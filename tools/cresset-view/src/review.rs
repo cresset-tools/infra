@@ -58,14 +58,24 @@ CREATE INDEX IF NOT EXISTS comment_thread_idx ON comment (thread_id, id);
 
 -- An approval of one patch set by one person.
 --
--- Keyed to the COMMIT id, not just the change: this is Gerrit's rule, and the reason for it is
--- the whole point of the gate. An approval says "I read this", and after an amend nobody has
--- read the thing that would land. So a new patch set starts unapproved, and the row approving
--- its predecessor stays as a record of what was actually read rather than being carried
--- forward onto text nobody looked at.
+-- Keyed to the change id and the PATCH ID of what was read — not to the commit id.
+--
+-- An approval says "I read this". Keyed to a commit id that was true but brittle: a rebase
+-- gives every commit a new id while changing nothing anybody read, so main moving underneath a
+-- change silently invalidated every approval on it. A gate that cannot tell a rebase from an
+-- edit is not a strict gate; it is one that makes people re-read text they have already read,
+-- which is how approval becomes a reflex.
+--
+-- The change id alone would be worse than either: it survives amends, which is the whole point
+-- of patch sets, so on its own it would let unreviewed edits land. The pair is what carries the
+-- distinction — see src/patch_id.rs for how the diff is reduced to one id, and why the push
+-- gate and this service must compute it with the same binary rather than two implementations.
+--
+-- commit_id stays, as the record of which patch set was actually in front of the reader.
 CREATE TABLE IF NOT EXISTS approval (
     change_id TEXT NOT NULL,
     commit_id TEXT NOT NULL,
+    patch_id TEXT NOT NULL DEFAULT '',
     approved_by TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (change_id, commit_id, approved_by)
@@ -130,6 +140,11 @@ pub struct ThreadRow {
 pub struct ApprovalRow {
     pub change_id: String,
     pub commit_id: String,
+    /// The patch id of the diff this person read. Empty only for rows written before approvals
+    /// were keyed this way; `republish_approvals` backfills those from the repository and the
+    /// gate ignores them until it has, so a pre-existing approval fails closed rather than
+    /// matching everything.
+    pub patch_id: String,
     pub approved_by: String,
     pub created_at: i64,
 }
@@ -177,6 +192,41 @@ impl Review {
     /// the worker's store does.
     pub fn migrate(&self) -> Result<()> {
         self.conn.execute_batch(SCHEMA)?;
+        // Approvals were originally keyed to the commit id alone, so a database that predates
+        // the change has no patch_id. `ALTER TABLE` is not idempotent, hence the check; the
+        // DEFAULT in SCHEMA covers databases created fresh.
+        if !self.has_column("approval", "patch_id")? {
+            self.conn.execute_batch(
+                "ALTER TABLE approval ADD COLUMN patch_id TEXT NOT NULL DEFAULT ''",
+            )?;
+        }
+        Ok(())
+    }
+
+    fn has_column(&self, table: &str, column: &str) -> Result<bool> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Fill in the patch id of an approval recorded before they were stored.
+    pub fn backfill_patch_id(
+        &self,
+        change_id: &str,
+        commit_id: &str,
+        patch_id: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE approval SET patch_id = ?3
+             WHERE change_id = ?1 AND commit_id = ?2 AND patch_id = ''",
+            params![change_id, commit_id, patch_id],
+        )?;
         Ok(())
     }
 
@@ -275,11 +325,17 @@ impl Review {
     }
 
     /// Record that `who` has read this exact patch set. Approving twice is not an error.
-    pub fn approve(&self, change_id: &str, commit_id: &str, who: &str) -> Result<()> {
+    pub fn approve(
+        &self,
+        change_id: &str,
+        commit_id: &str,
+        patch_id: &str,
+        who: &str,
+    ) -> Result<()> {
         self.conn.execute(
-            "INSERT OR IGNORE INTO approval (change_id, commit_id, approved_by)
-             VALUES (?1, ?2, ?3)",
-            params![change_id, commit_id, who],
+            "INSERT OR IGNORE INTO approval (change_id, commit_id, patch_id, approved_by)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![change_id, commit_id, patch_id, who],
         )?;
         Ok(())
     }
@@ -299,7 +355,7 @@ impl Review {
 
     pub fn approvals_for_change(&self, change_id: &str) -> Result<Vec<ApprovalRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT change_id, commit_id, approved_by, created_at
+            "SELECT change_id, commit_id, patch_id, approved_by, created_at
              FROM approval WHERE change_id = ?1 ORDER BY created_at, approved_by",
         )?;
         let rows = stmt.query_map(params![change_id], approval_from_row)?;
@@ -316,7 +372,7 @@ impl Review {
     /// change, and a file whose lines shuffle produces noise in anything watching it.
     pub fn all_approvals(&self) -> Result<Vec<ApprovalRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT change_id, commit_id, approved_by, created_at
+            "SELECT change_id, commit_id, patch_id, approved_by, created_at
              FROM approval ORDER BY change_id, commit_id, approved_by",
         )?;
         let rows = stmt.query_map([], approval_from_row)?;
@@ -353,8 +409,9 @@ fn approval_from_row(row: &Row<'_>) -> rusqlite::Result<ApprovalRow> {
     Ok(ApprovalRow {
         change_id: row.get(0)?,
         commit_id: row.get(1)?,
-        approved_by: row.get(2)?,
-        created_at: row.get(3)?,
+        patch_id: row.get(2)?,
+        approved_by: row.get(3)?,
+        created_at: row.get(4)?,
     })
 }
 

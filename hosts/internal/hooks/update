@@ -78,9 +78,46 @@ for sha in $(git rev-list "$old..$new"); do
     continue
   fi
 
-  # The pair, not just the change: an approval says "I read this", and after an amend nobody has
-  # read the thing that would land.
-  if [ "$readable" = yes ] && printf '%s\n' "$approved" | grep -qxF "$cid $sha"; then
+  # What this commit DOES, reduced to one id — not which commit holds it.
+  #
+  # Keyed to the commit id, this gate could not tell a rebase from an edit. main moving
+  # underneath an open change gave every commit in it a new id, so every approval on it stopped
+  # counting and the reviewer was asked to re-read text they had already read. That is not
+  # strictness; it is the fastest way to make approval a reflex. Keyed to the patch id, a clean
+  # rebase keeps its approval and an amend does not.
+  #
+  # `git patch-id --stable`, the same binary cresset-view runs, for the reason given in
+  # tools/cresset-view/src/patch_id.rs: two implementations that agree today would be one commit
+  # from disagreeing, and disagreement here either blocks approved work or admits unapproved
+  # work.
+  #
+  # A merge prints no diff without -m, which would be indistinguishable from an empty commit —
+  # so a merge is refused by name rather than treated as empty. main is fast-forward only and
+  # review changes are linear, so one here means something unexpected.
+  if [ "$(git rev-list --parents -1 "$sha" | wc -w)" -gt 2 ]; then
+    unapproved="$unapproved$(git rev-parse --short "$sha")	$cid	(a merge commit; cannot say what it changes on its own)
+"
+    continue
+  fi
+
+  diff=$(git diff-tree -p --no-commit-id "$sha")
+  if [ -z "$diff" ]; then
+    # Not 40 hex characters, so it can never collide with a real patch id. Must match EMPTY in
+    # tools/cresset-view/src/patch_id.rs.
+    pid=empty-diff
+  else
+    pid=$(printf '%s\n' "$diff" | git patch-id --stable | cut -d' ' -f1)
+  fi
+
+  if [ -z "$pid" ]; then
+    unapproved="$unapproved$(git rev-parse --short "$sha")	$cid	(could not determine what this commit changes)
+"
+    continue
+  fi
+
+  # The pair, not just the change: the change id survives an amend, which is the whole point of
+  # patch sets, so on its own it would let unreviewed edits land.
+  if [ "$readable" = yes ] && printf '%s\n' "$approved" | grep -qxF "$cid $pid"; then
     continue
   fi
   unapproved="$unapproved$(git rev-parse --short "$sha")	$cid	$reviewUrl/?change=$cid
@@ -116,6 +153,7 @@ fi
 printf '%s' "$unapproved" >&2
 echo >&2
 echo "Approve each of these in cresset-view, then push again. An approval covers one exact" >&2
-echo "patch set, so amending after approving means approving the new version." >&2
+echo "DIFF, so rebasing after approving is fine and keeps the approval, while amending the" >&2
+echo "change means approving the new version." >&2
 echo "To land without one, on the host: touch $breakGlass  (good for a single push)." >&2
 exit 1

@@ -45,13 +45,24 @@ const MODE: u32 = 0o640;
 pub fn render(approvals: &[ApprovalRow]) -> String {
     let mut lines: Vec<String> = approvals
         .iter()
-        .map(|approval| format!("{} {}", approval.change_id, approval.commit_id))
+        // A row with no patch id predates them being stored and has not been backfilled —
+        // usually because the commit it approved is no longer in the repository. Omitted rather
+        // than written with an empty field: a line the gate cannot match is honest, a line that
+        // might match the empty string is not.
+        .filter(|approval| !approval.patch_id.is_empty())
+        .map(|approval| format!("{} {}", approval.change_id, approval.patch_id))
         .collect();
+    lines.sort();
     lines.dedup();
     let mut out = String::from(
-        "# Approved patch sets, written by cresset-view. Do not edit: it is rewritten\n\
+        "# Approved diffs, written by cresset-view. Do not edit: it is rewritten\n\
          # from the review database on every approval and at startup.\n\
-         # <jj change id> <git commit id>\n",
+         #\n\
+         # <jj change id> <git patch id of the approved diff>\n\
+         #\n\
+         # The patch id rather than the commit id, so that a rebase — which changes every\n\
+         # commit id while changing nothing anybody read — keeps its approval, and an amend\n\
+         # does not. See cresset-view's src/patch_id.rs.\n",
     );
     for line in lines {
         out.push_str(&line);
@@ -92,10 +103,11 @@ pub fn write(path: &Path, approvals: &[ApprovalRow]) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn approval(change: &str, commit: &str, who: &str) -> ApprovalRow {
+    fn approval(change: &str, patch: &str, who: &str) -> ApprovalRow {
         ApprovalRow {
             change_id: change.into(),
-            commit_id: commit.into(),
+            commit_id: format!("commit-of-{patch}"),
+            patch_id: patch.into(),
             approved_by: who.into(),
             created_at: 0,
         }

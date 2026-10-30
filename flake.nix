@@ -406,6 +406,12 @@
             jj git push -b "review/$4" >/dev/null 2>&1
           }
 
+          # What a commit DOES, which is what an approval is keyed to. Same two commands the
+          # hook runs and cresset-view runs, deliberately -- see tools/cresset-view/src/patch_id.rs.
+          pidof() {
+            g diff-tree -p --no-commit-id "$1" | git patch-id --stable | cut -d' ' -f1
+          }
+
           submit "work to land" h.txt landed land
           land=$(jj log -r 'review/land' --no-graph -T 'commit_id')
           landCid=$(jj log -r 'review/land' --no-graph -T 'change_id')
@@ -430,19 +436,22 @@
           grep -q "code.cresset.tools/?change=$landCid" push.txt \
             || { echo "FAIL: the refusal must say where to review it"; cat push.txt; exit 1; }
 
-          # 9. Approving the exact patch set lets it through. This is the format cresset-view
+          # 9. Approving the exact DIFF lets it through. This is the format cresset-view
           #    writes; tools/cresset-view/src/approvals.rs asserts the other side of it.
-          echo "$landCid $land" > "$TMPDIR/approved"
+          echo "$landCid $(pidof "$land")" > "$TMPDIR/approved"
           jj git push -b main >/dev/null 2>push.txt \
             || { echo "FAIL: an approved push was refused"; cat push.txt; exit 1; }
           test "$(g rev-parse refs/heads/main)" = "$land" \
             || { echo "FAIL: main did not advance to the approved commit"; exit 1; }
 
-          # 10. Approval is keyed to the COMMIT, not the change. Amending after approving means
+          # 10. Approval is keyed to the DIFF, not the change. Amending after approving means
           #     nobody has read what would land, so the stale line must not satisfy the gate.
+          #     This is the half that keeps the gate a gate: without it the change id alone
+          #     would do, and an amend after approval would land unread.
           submit "second" i.txt more second
           secondCid=$(jj log -r 'review/second' --no-graph -T 'change_id')
-          echo "$secondCid $(jj log -r 'review/second' --no-graph -T 'commit_id')" > "$TMPDIR/approved"
+          echo "$secondCid $(pidof "$(jj log -r 'review/second' --no-graph -T 'commit_id')")" \
+            > "$TMPDIR/approved"
           jj edit 'review/second' >/dev/null
           echo more-amended > i.txt
           jj bookmark set review/second -r @ >/dev/null
@@ -468,6 +477,87 @@
           if jj git push -b main >/dev/null 2>push.txt; then
             echo "FAIL: break-glass allowed a second push"; cat push.txt; exit 1
           fi
+
+          # 12b. A REBASE KEEPS ITS APPROVAL. The case this gate was rebuilt for.
+          #
+          #      Jelle approved a change, main moved by something unrelated, and rebasing threw
+          #      the approval away -- so he was asked to re-read text he had already read. Since
+          #      cresset-view's own Rebase button produces exactly this, it was the common case.
+          #      Keyed to the commit id the gate could not tell a rebase from an edit; keyed to
+          #      the patch id it can, and check 10 above is the other half of the proof.
+          #      Start from the remote's main, not the local bookmark: checks 11 and 12 left it
+          #      pointing at a commit the remote refused, and building on that would push an
+          #      unapproved commit alongside this one and prove nothing about rebasing.
+          jj bookmark set main -r 'main@canonical' --allow-backwards >/dev/null
+          jj new 'main@canonical' -m "approved then rebased" >/dev/null
+          echo body > m.txt
+          jj bookmark set review/rebased -r @ >/dev/null
+          jj new >/dev/null
+          jj git push -b review/rebased >/dev/null 2>&1
+          rebasedCid=$(jj log -r 'review/rebased' --no-graph -T 'change_id')
+          echo "$rebasedCid $(pidof "$(jj log -r 'review/rebased' --no-graph -T 'commit_id')")" \
+            > "$TMPDIR/approved"
+
+          #      Something unrelated lands on main underneath it.
+          jj new 'main@canonical' -m "unrelated, landed meanwhile" >/dev/null
+          echo meanwhile > unrelated.txt
+          jj bookmark set review/unrelated -r @ >/dev/null
+          jj new >/dev/null
+          jj git push -b review/unrelated >/dev/null 2>&1
+          unrelatedCid=$(jj log -r 'review/unrelated' --no-graph -T 'change_id')
+          echo "$unrelatedCid $(pidof "$(jj log -r 'review/unrelated' --no-graph -T 'commit_id')")" \
+            >> "$TMPDIR/approved"
+          jj bookmark set main -r 'review/unrelated' >/dev/null
+          jj git push -b main >/dev/null 2>push.txt \
+            || { echo "FAIL: the unrelated change would not land"; cat push.txt; exit 1; }
+
+          #      Now rebase the approved change onto the new main. Every commit id changes.
+          wasAt=$(jj log -r 'review/rebased' --no-graph -T 'commit_id')
+          jj rebase -b 'review/rebased' -d main >/dev/null 2>&1
+          nowAt=$(jj log -r 'review/rebased' --no-graph -T 'commit_id')
+          test "$wasAt" != "$nowAt" \
+            || { echo "FAIL: the fixture did not actually rebase; this proves nothing"; exit 1; }
+          jj git push -b review/rebased >/dev/null 2>&1
+
+          #      The approval was never rewritten, and the push must still be allowed.
+          jj bookmark set main -r 'review/rebased' >/dev/null
+          jj git push -b main >/dev/null 2>push.txt \
+            || { echo "FAIL: a rebased but approved change was refused"; cat push.txt; exit 1; }
+          test "$(g rev-parse refs/heads/main)" = "$nowAt" \
+            || { echo "FAIL: main did not advance to the rebased commit"; exit 1; }
+
+          # 12c. A merge commit is refused by name rather than read as an empty diff.
+          #
+          #      `git diff-tree -p` prints nothing for a merge without -m, so without the guard
+          #      it takes the empty-diff path -- and an approval of an empty change would then
+          #      satisfy a merge carrying anything at all.
+          #
+          #      Built with jj, because a merge made with plain git has no change-id and is
+          #      refused for THAT instead, several branches earlier. The first version of this
+          #      check did exactly that and asserted nothing about merges.
+          jj new 'main@canonical' -m "left" >/dev/null
+          echo left > left.txt
+          left=$(jj log -r @ --no-graph -T 'commit_id')
+          leftCid=$(jj log -r @ --no-graph -T 'change_id')
+          jj new 'main@canonical' -m "right" >/dev/null
+          echo right > right.txt
+          right=$(jj log -r @ --no-graph -T 'commit_id')
+          rightCid=$(jj log -r @ --no-graph -T 'change_id')
+          jj new "$left" "$right" -m "a merge" >/dev/null
+          jj bookmark set review/merged -r @ >/dev/null
+          jj new >/dev/null
+          jj git push -b review/merged >/dev/null 2>&1
+
+          #      Both sides approved, so the merge itself is the only thing left to object to.
+          echo "$leftCid $(pidof "$left")" > "$TMPDIR/approved"
+          echo "$rightCid $(pidof "$right")" >> "$TMPDIR/approved"
+          jj bookmark set main -r 'review/merged' >/dev/null
+          if jj git push -b main >/dev/null 2>merge.txt; then
+            echo "FAIL: a merge commit landed on main"; cat merge.txt; exit 1
+          fi
+          grep -q "merge commit" merge.txt \
+            || { echo "FAIL: the refusal must name the merge"; cat merge.txt; exit 1; }
+          jj bookmark set main -r 'main@canonical' --allow-backwards >/dev/null
 
           # 13. THE PROPERTY MOST LIKELY TO BE BROKEN LATER. The sync worker advances main with
           #     a local `git update-ref`, which does not run hooks. That is not an oversight to

@@ -111,6 +111,8 @@ interface ChangeSummary {
   author_name: string;
   authored_at: string;
   patch_sets: number;
+  /// What the current version does, for matching approvals against. See `approvalsOf`.
+  patch_id?: string;
   has_conflict: boolean;
   /// Absent when nothing has been reported, which is NOT the same as failing.
   checks?: ProjectChecks[];
@@ -137,12 +139,17 @@ interface ChangesResponse {
 interface PatchSet {
   number: number;
   commit_id: string;
+  /// What this version does. Two patch sets sharing one differ only in what they sit on.
+  patch_id?: string;
   current: boolean;
 }
 
 interface Approval {
   change_id: string;
   commit_id: string;
+  /// What was read, which is what the approval is keyed to. Empty only for approvals recorded
+  /// before they were stored this way and whose commit has since gone from the repository.
+  patch_id: string;
   approved_by: string;
   created_at: number;
 }
@@ -697,7 +704,7 @@ async function loadReviewQueue(wanted: string | null = null) {
     for (const change of stack.changes) {
       const button = document.createElement('button');
       button.className = 'revision in-stack';
-      const approved = approvalsOf(change.commit_id).length > 0;
+      const approved = approvalsOf(change.patch_id).length > 0;
       button.innerHTML = `
         <span class="revision-copy">
           <span class="revision-id">${escapeHtml(short(change.change_id))}</span>
@@ -733,8 +740,21 @@ async function loadReviewQueue(wanted: string | null = null) {
   }
 }
 
-function approvalsOf(commitId: string): Approval[] {
-  return reviewAllApprovals.filter((approval) => approval.commit_id === commitId);
+/// Approvals that answer for a given version — matched on what it DOES, not which commit holds
+/// it.
+///
+/// Matching on the commit id was the bug: main moving underneath an open change gave every
+/// commit in it a new id, so every approval stopped counting and the queue showed approved work
+/// as unapproved. The Rebase button a few lines away produced exactly that. An empty patch id
+/// never matches, so an approval too old to have one reads as absent rather than as universal.
+function approvalsHereFor(patchId: string | undefined): Approval[] {
+  if (!patchId) return [];
+  return reviewApprovals.filter((approval) => approval.patch_id === patchId);
+}
+
+function approvalsOf(patchId: string | undefined): Approval[] {
+  if (!patchId) return [];
+  return reviewAllApprovals.filter((approval) => approval.patch_id === patchId);
 }
 
 /// A stack's header: the bookmark, how much of it is approved, and the Merge button.
@@ -744,7 +764,7 @@ function approvalsOf(commitId: string): Approval[] {
 /// politeness, not enforcement: the gate is the update hook, and if this is wrong the push is
 /// refused and says why.
 function renderStackHeader(stack: Stack): HTMLElement {
-  const ready = stack.changes.filter((c) => approvalsOf(c.commit_id).length > 0).length;
+  const ready = stack.changes.filter((c) => approvalsOf(c.patch_id).length > 0).length;
   const total = stack.changes.length;
   // CI blocks landing, and "nothing reported" does not. A project with no CI must not become
   // unmergeable, and a snapshot that has not been written yet must not either — so only an
@@ -958,7 +978,7 @@ function renderChangeHeading(detail: ChangeDetail, showing: string) {
         ${sets.length > 1 && showing !== (sets.find((s) => s.current)?.commit_id ?? '')
           ? '<span class="patch-note">viewing a superseded version</span>' : ''}
       </div>`}
-    ${renderApprovalControl(showing)}
+    ${renderApprovalControl(showing, sets)}
   `;
   for (const button of changeHeading.querySelectorAll<HTMLButtonElement>('[data-patch-set]')) {
     button.addEventListener('click', () => {
@@ -975,11 +995,22 @@ function renderChangeHeading(detail: ChangeDetail, showing: string) {
 /// this exact text, and hooks/update matches on the commit id. Approving while looking at a
 /// superseded version approves that version and will not let the current one land -- so the
 /// control says which one it means, rather than leaving it to be discovered at push time.
-function renderApprovalControl(showing: string): string {
+function renderApprovalControl(showing: string, sets: PatchSet[]): string {
   if (!reviewWritable) return '';
-  const here = reviewApprovals.filter((approval) => approval.commit_id === showing);
+  const showingPatch = sets.find((set) => set.commit_id === showing);
+  const here = approvalsHereFor(showingPatch?.patch_id);
   const elsewhere = reviewApprovals.length - here.length;
   const mine = here.some((approval) => approval.approved_by === reviewIdentity);
+
+  // An approval given against an EARLIER patch set that still answers for this one. The reader
+  // deserves to know that is why it counts, rather than being told "approved" about a version
+  // nobody opened — and that it is the diff being unchanged, not the gate being lax.
+  const carried = here
+    .filter((approval) => approval.commit_id !== showing)
+    .map((approval) => sets.find((set) => set.commit_id === approval.commit_id))
+    .filter((set): set is PatchSet => set !== undefined)
+    .map((set) => set.number)
+    .sort((a, b) => a - b);
   return `
     <div class="approval">
       <button type="button" data-approve class="${mine ? 'withdraw' : ''}">
@@ -990,15 +1021,17 @@ function renderApprovalControl(showing: string): string {
           ? 'Not approved'
           : `Approved by ${here.map((a) => escapeHtml(a.approved_by)).join(', ')}`}
       </span>
-      ${elsewhere === 0 ? '' : `<span class="approval-note">${elsewhere} approval${elsewhere === 1 ? '' : 's'} of another patch set, which will not let this one land</span>`}
+      ${carried.length === 0 ? '' : `<span class="approval-note">diff unchanged since patch set ${carried.join(', ')}, so that approval still answers for this one</span>`}
+      ${elsewhere === 0 ? '' : `<span class="approval-note">${elsewhere} approval${elsewhere === 1 ? '' : 's'} of a different diff, which will not let this one land</span>`}
       ${reviewGated ? '' : '<span class="approval-note">this instance records approvals but does not gate pushes</span>'}
     </div>
   `;
 }
 
 async function toggleApproval(detail: ChangeDetail, showing: string, button: HTMLButtonElement) {
-  const mine = reviewApprovals.some(
-    (approval) => approval.commit_id === showing && approval.approved_by === reviewIdentity,
+  const showingPatch = detail.patch_sets.find((set) => set.commit_id === showing);
+  const mine = approvalsHereFor(showingPatch?.patch_id).some(
+    (approval) => approval.approved_by === reviewIdentity,
   );
   // Say what is happening. A disabled button that only changes back when the answer arrives
   // is indistinguishable from a dead one, and the first person to use this pressed it three

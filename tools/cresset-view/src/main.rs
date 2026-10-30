@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod approvals;
+mod patch_id;
 mod review;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -124,6 +125,12 @@ struct AppState {
     approvals_file: Option<Arc<PathBuf>>,
     checks_file: Option<Arc<PathBuf>>,
     merge: Option<Arc<MergeConfig>>,
+    /// The git object store behind `repository`, for computing patch ids.
+    ///
+    /// Resolved once at startup rather than per request: it cannot change while the service
+    /// runs, and a resolution failure should be visible at startup rather than at the moment
+    /// somebody tries to approve something.
+    git_dir: Option<Arc<PathBuf>>,
 }
 
 /// What CI said about one change in one downstream project.
@@ -255,6 +262,12 @@ struct ChangeSummary {
     authored_at: String,
     /// How many versions have been pushed. 1 means it has not been revised yet.
     patch_sets: usize,
+    /// What this version DOES, which is what an approval is keyed to. The UI joins approvals on
+    /// this rather than on `commit_id`, so a rebase — which changes every commit id while
+    /// changing nothing anybody read — still shows as approved. `None` when the git store could
+    /// not be found at startup, in which case nothing can be approved anyway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    patch_id: Option<String>,
     has_conflict: bool,
     /// What CI said, per downstream project this change was submitted to. Empty means nothing
     /// has been reported — which is not the same as failing, and the gate treats it that way.
@@ -294,6 +307,10 @@ struct ChangesResponse {
 struct PatchSet {
     number: u32,
     commit_id: String,
+    /// What this version does. Two patch sets sharing one of these differ only in what they sit
+    /// on, which is what lets an approval of the earlier one still answer for the later.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    patch_id: Option<String>,
     /// False once a newer patch set exists. The reviewer needs to know whether they are
     /// reading the version that would land.
     current: bool,
@@ -554,6 +571,20 @@ async fn main() -> Result<()> {
             (None, None) => None,
             _ => bail!("--merge-remote and --merge-ssh-key must be given together"),
         },
+        git_dir: None,
+    };
+    // Approvals are keyed to the patch id of what was read, which needs the git store behind
+    // the jj repository. A warning rather than a failure to start: the viewer and its diffs are
+    // useful without it, and saying so once at startup beats a puzzling error at approval time.
+    let state = match patch_id::resolve_git_dir(state.repository.as_ref()) {
+        Ok(git_dir) => AppState {
+            git_dir: Some(Arc::new(git_dir)),
+            ..state
+        },
+        Err(error) => {
+            tracing::warn!(%error, "cannot find the git store behind the repository; approvals cannot be recorded");
+            state
+        }
     };
     // Regenerate before serving. The file is a projection of the database, and the push gate
     // fails closed on a missing one — so a file lost to a redeployed state directory would
@@ -901,6 +932,7 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
     // moments in one response.
     let snapshot = read_checks(&state);
     let path = state.repository.as_ref().clone();
+    let git_dir = state.git_dir.as_ref().map(|dir| dir.as_ref().clone());
     let response = run_jj(move || async move {
         let loaded = load_repository(&path).await?;
         let repo = loaded.repo.as_ref();
@@ -960,6 +992,12 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
             for commit in commits {
                 let change_id = commit.change_id().reverse_hex();
                 let patch_sets = read_patch_sets(repo, &change_id)?.len();
+                // Two short-lived git processes per change. Cheap next to the repository load
+                // this is already inside, and the alternative — having the browser decide what
+                // an approval covers — would put the gate's rule in two places.
+                let patch_id = git_dir
+                    .as_ref()
+                    .and_then(|dir| patch_id::of_commit(dir, &commit.id().hex()).ok());
                 let checks = snapshot
                     .changes
                     .get(&change_id)
@@ -972,6 +1010,7 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
                     author_name: commit.author().name.clone(),
                     authored_at: commit.author().timestamp.to_datetime()?.to_rfc3339(),
                     patch_sets,
+                    patch_id,
                     has_conflict: commit.has_conflict(),
                     checks,
                 });
@@ -1020,6 +1059,7 @@ async fn change(
     AxumPath(change_id): AxumPath<String>,
 ) -> Result<Json<ChangeDetail>, AppError> {
     let path = state.repository.as_ref().clone();
+    let git_dir = state.git_dir.as_ref().map(|dir| dir.as_ref().clone());
     let response = run_jj(move || async move {
         let loaded = load_repository(&path).await?;
         let repo = loaded.repo.as_ref();
@@ -1032,6 +1072,9 @@ async fn change(
         let patch_sets = recorded
             .into_iter()
             .map(|(number, commit_id)| PatchSet {
+                patch_id: git_dir
+                    .as_ref()
+                    .and_then(|dir| patch_id::of_commit(dir, &commit_id).ok()),
                 number,
                 commit_id,
                 current: Some(number) == latest,
@@ -1242,7 +1285,16 @@ async fn set_approval(
 
     let db = open_review(&state)?;
     if body.approved {
-        db.approve(&change_id, commit_id, &identity.0)?;
+        // What the reviewer actually read, reduced to one id. Computed here rather than at
+        // projection time so the record says what was in front of them even if the commit is
+        // later garbage collected.
+        let git_dir = state
+            .git_dir
+            .as_ref()
+            .context("approvals cannot be recorded: the git store behind the repository was not found at startup")?;
+        let patch = patch_id::of_commit(git_dir.as_ref(), commit_id)
+            .context("working out what this patch set changes")?;
+        db.approve(&change_id, commit_id, &patch, &identity.0)?;
     } else {
         db.withdraw(&change_id, commit_id, &identity.0)?;
     }
@@ -1250,10 +1302,7 @@ async fn set_approval(
     // The file is what the push gate reads, so a failure to write it must reach the reviewer
     // rather than being logged: they would otherwise see an approval recorded and a push refused
     // for no visible reason.
-    if let Some(path) = state.approvals_file.as_ref() {
-        approvals::write(path.as_ref(), &db.all_approvals()?)
-            .context("recording the approval for the push gate")?;
-    }
+    republish_approvals(&state).context("recording the approval for the push gate")?;
 
     Ok(Json(ApprovalsResponse {
         approvals: db.approvals_for_change(&change_id)?,
@@ -1597,6 +1646,30 @@ fn republish_approvals(state: &AppState) -> Result<()> {
         return Ok(());
     };
     let db = open_review(state).context("opening the review database to publish approvals")?;
+
+    // Approvals recorded before they were keyed to a patch id have none stored. Fill them in
+    // from the repository where the approved commit is still there, so an approval given before
+    // this change keeps working. Where the commit has gone the row stays empty and `render`
+    // omits it: the approval fails closed rather than matching anything.
+    if let Some(git_dir) = state.git_dir.as_ref() {
+        for approval in db.all_approvals()? {
+            if !approval.patch_id.is_empty() {
+                continue;
+            }
+            match patch_id::of_commit(git_dir.as_ref(), &approval.commit_id) {
+                Ok(patch) => {
+                    db.backfill_patch_id(&approval.change_id, &approval.commit_id, &patch)?;
+                }
+                Err(error) => tracing::warn!(
+                    change = %approval.change_id,
+                    commit = %approval.commit_id,
+                    %error,
+                    "an approval from before patch ids were stored cannot be backfilled; it will not count until the change is approved again"
+                ),
+            }
+        }
+    }
+
     approvals::write(path.as_ref(), &db.all_approvals()?)
 }
 

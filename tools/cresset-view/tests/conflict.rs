@@ -395,6 +395,38 @@ fn a_conflicted_path_shows_its_markers_in_the_diff() {
 /// The shape matters. Reading only `local_bookmarks()` returns an empty queue against a real
 /// viewer repository, because that repository only ever fetches and so never has a local
 /// review bookmark. A fixture that pushed nowhere would have passed anyway.
+/// The patch id of a commit, the way the service and the push gate both compute it.
+fn patch_id_of(git_dir: &Path, commit: &str) -> String {
+    let diff = Command::new("git")
+        .arg("--git-dir")
+        .arg(git_dir)
+        .args(["diff-tree", "-p", "--no-commit-id", commit])
+        .output()
+        .expect("diff-tree");
+    assert!(diff.status.success(), "diff-tree failed");
+    let mut child = std::process::Command::new("git")
+        .args(["patch-id", "--stable"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("patch-id");
+    {
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(&diff.stdout)
+            .expect("wrote");
+    }
+    let out = child.wait_with_output().expect("patch-id finished");
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .expect("a patch id")
+        .to_owned()
+}
+
 fn review_repo(dir: &Path) -> (String, String) {
     let bare = dir.join("canonical.git");
     let work = dir.join("work");
@@ -873,11 +905,19 @@ fn approving_publishes_the_file_the_gate_reads() {
     );
 
     let published = std::fs::read_to_string(&approvals).expect("approvals file");
+    // The pair is (change id, PATCH id) — what was read, not which commit held it. The commit
+    // id must not appear at all: a gate matching on it is the bug this replaced, where main
+    // moving underneath a change threw away every approval on it.
+    let patch = patch_id_of(&dir.path().join("work/.git"), &commit);
     assert!(
         published
             .lines()
-            .any(|line| line == format!("{change} {commit}")),
+            .any(|line| line == format!("{change} {patch}")),
         "the hook greps for the exact pair on its own line: {published}"
+    );
+    assert!(
+        !published.contains(&commit),
+        "the commit id has no business in the gate's file: {published}"
     );
 
     // A short id would be recorded and then never match `git rev-list`'s full ids, so the gate
@@ -1281,7 +1321,9 @@ fn checks_are_reported_and_an_absent_snapshot_is_not_a_failure() {
 
     // No snapshot at all: the queue still serves, and reports nothing about CI.
     let server = Server::start_with(&viewer, &["--checks-file", checks.to_str().unwrap()]);
-    let body = server.get("/api/changes").expect("queue served with no snapshot");
+    let body = server
+        .get("/api/changes")
+        .expect("queue served with no snapshot");
     let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
     assert!(
         value["stacks"][0]["changes"][0].get("checks").is_none(),
@@ -1306,7 +1348,10 @@ fn checks_are_reported_and_an_absent_snapshot_is_not_a_failure() {
     let body = server.get("/api/changes").expect("queue served");
     let value: serde_json::Value = serde_json::from_str(&body).expect("valid json");
     let reported = &value["stacks"][0]["changes"][0]["checks"][0];
-    assert_eq!(reported["rollup"], "failing", "the failure must reach the queue: {value}");
+    assert_eq!(
+        reported["rollup"], "failing",
+        "the failure must reach the queue: {value}"
+    );
     assert_eq!(reported["pull_request"], 109);
     assert_eq!(
         reported["pull_request_url"], "https://github.com/cresset-tools/x/pull/109",
@@ -1373,5 +1418,91 @@ fn writing_without_a_review_database_explains_itself() {
     assert!(
         message.contains("read-only"),
         "it must say the instance is read-only rather than failing obscurely: {message}"
+    );
+}
+
+/// The bug this was built for: Jelle approved a change, main moved by something unrelated, and
+/// rebasing threw the approval away — so he was asked to re-read text he had already read.
+///
+/// Rebase is the viewer's own button, so this was the common case rather than an edge one.
+#[test]
+fn a_rebase_keeps_its_approval_and_an_amend_does_not() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (change, before) = review_repo(dir.path());
+    let bare = dir.path().join("canonical.git");
+    let work = dir.path().join("work");
+    let approvals = dir.path().join("approved");
+
+    // Something unrelated lands on main, touching a file the change never mentions.
+    jj(
+        &work,
+        &["new", "main", "-m", "landed while the change was open"],
+    );
+    std::fs::write(work.join("landed.txt"), "meanwhile\n").expect("write");
+    jj(&work, &["bookmark", "set", "main", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "main"]);
+
+    let server = Server::start_with(
+        &dir.path().join("viewer"),
+        &[
+            "--review-db",
+            dir.path().join("review.db").to_str().unwrap(),
+            "--approvals-file",
+            approvals.to_str().unwrap(),
+            "--merge-remote",
+            bare.to_str().unwrap(),
+            "--merge-ssh-key",
+            "/dev/null",
+            "--rebase-workspace",
+            dir.path().join("rebase").to_str().unwrap(),
+        ],
+    );
+
+    let (status, body) = server.post(
+        &format!("/api/changes/{change}/approvals"),
+        &format!(r#"{{"commit_id":"{before}","approved":true}}"#),
+        &[],
+    );
+    assert_eq!(status, 200, "approving must succeed: {body}");
+    let approved_line = format!("{change} {}", patch_id_of(&bare, &before));
+
+    let (status, body) = server.post("/api/rebase", r#"{"bookmark":"review/thing"}"#, &[]);
+    assert_eq!(status, 200, "the rebase must succeed: {body}");
+    let body: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    let after = body["tip"].as_str().expect("a tip").to_string();
+    assert_ne!(after, before, "the rebase must produce a new commit id");
+
+    // The heart of it: a different commit, doing the same thing, so the approval still answers
+    // for it. Checked against the published file, because that is what the push gate reads —
+    // asserting on the database would pass while pushes were still refused.
+    let published = std::fs::read_to_string(&approvals).expect("approvals file");
+    assert_eq!(
+        patch_id_of(&bare, &after),
+        patch_id_of(&bare, &before),
+        "a rebase over an unrelated change must not alter what the change does"
+    );
+    assert!(
+        published.lines().any(|line| line == approved_line),
+        "the approval must still be in the gate's file: {published}"
+    );
+
+    // And the other half, which is what stops this being a hole: editing the change after
+    // approval must need a fresh one. Without this the change id alone would do, and an amend
+    // would land unread.
+    jj(&work, &["git", "fetch", "--remote", "canonical"]);
+    jj(&work, &["edit", &after]);
+    std::fs::write(work.join("g.txt"), "one\nsmuggled in after approval\n").expect("write");
+    let amended = jj(&work, &["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+    let work_git = work.join(".git");
+    assert_ne!(
+        patch_id_of(&work_git, &amended),
+        patch_id_of(&bare, &before),
+        "an amend must not inherit the approval"
+    );
+    assert!(
+        !published
+            .lines()
+            .any(|line| line == format!("{change} {}", patch_id_of(&work_git, &amended))),
+        "the amended diff was never approved and must not appear: {published}"
     );
 }
