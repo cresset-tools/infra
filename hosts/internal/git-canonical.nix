@@ -66,6 +66,30 @@ let
     text = builtins.readFile ./hooks/update;
   };
 
+  # The review CLI's server side. See hosts/internal/review-shell for what it does and why it
+  # goes through cresset-view rather than opening review.db.
+  reviewShell = import ../../tools/cresset-review/package.nix { inherit pkgs; };
+
+  # Who may read and answer review comments from a terminal, and under what name.
+  #
+  # The identity is pinned in the forced command, NOT taken from the caller. That is the whole
+  # security property: a key can choose which verb to run and never whose name is attached to
+  # what it says. Agents are named distinctly from the person, so a remark written by a machine
+  # is never mistaken for one Jelle made — the threads are a record, and a record that blurs
+  # who said what is worth less than no record.
+  reviewKeys = [
+    # The CLI's own key, which lives on the dev box at ~/.ssh/cresset-review. Agents run there
+    # as Jelle and would otherwise authenticate with his push key, so every remark a machine
+    # wrote would be signed with his name — the exact confusion the threads exist to avoid.
+    # A separate key is the cheapest way to keep them distinguishable, and it grants only what
+    # this forced command allows: reading and replying, never approving.
+    { identity = "jelle via agent"; key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBLbnlVyid4hHQqXaVGVuvWtx7dxDljmerla7L8M76Gm cresset-review cli (read and reply only)"; }
+
+    # Jelle's own keys, for reading threads from a terminal as himself.
+    { identity = "jelle"; key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMAlEwhbBOJor7VO1Bkv7jLM4aTzElFGSdduEMIz73d7 jelle@dev-debn-02"; }
+    { identity = "jelle"; key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICunYiTe1MOJsGC5OBn69bewMBS5bCCE1WayvM4DZLwE jelle@Jelles-MacBook-Pro.local"; }
+  ];
+
   # Belt-and-braces per-key hardening: even though git-shell already blocks
   # everything but push/pull, disable the ssh side channels too.
   restrict = "restrict";
@@ -108,6 +132,21 @@ in
 
   # git-shell must be a listed login shell or sshd/login refuse it.
   environment.shells = [ gitShell ];
+
+  # The account the review CLI logs in as. It owns nothing and can do nothing but run the
+  # forced command below: `restrict` removes every ssh side channel, and the command= means the
+  # verb a caller sends is an argument to that script rather than something to execute.
+  users.groups.cresset-review-cli = { };
+  users.users.cresset-review-cli = {
+    isSystemUser = true;
+    group = "cresset-review-cli";
+    home = "/var/empty";
+    shell = "${pkgs.bashInteractive}/bin/bash";
+    description = "Review comments over ssh (forced command only)";
+    openssh.authorizedKeys.keys = map
+      (entry: "${restrict},command=\"${reviewShell}/bin/cresset-review-shell ${entry.identity}\" ${entry.key}")
+      reviewKeys;
+  };
 
   # Create + initialise the bare canonical repo under /srv/git. /srv is the
   # Hetzner Cloud Volume, mounted with `nofail`, which removes it from

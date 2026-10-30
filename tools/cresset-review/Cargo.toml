@@ -1,0 +1,21 @@
+[package]
+name = "cresset-review"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+# Bundled rather than linked against a system library, matching cresset-view and cresset-sync,
+# so the forced command on the host owns its own TLS and HTTP versions.
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[[bin]]
+name = "cresset-review"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "cresset-review-shell"
+path = "src/bin/shell.rs"

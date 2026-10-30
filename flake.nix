@@ -500,6 +500,9 @@
         in {
           inherit (images) phpRuntime magentoImage;
           cresset-view = import ./tools/cresset-view/package.nix { inherit pkgs; };
+            # Exposed as a package, not only as part of the host, because the CLI half runs on
+            # a developer's machine: `nix run <this flake>#cresset-review -- threads <id>`.
+            cresset-review = import ./tools/cresset-review/package.nix { inherit pkgs; };
         };
 
       apps.${system} = {
