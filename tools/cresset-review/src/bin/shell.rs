@@ -24,9 +24,19 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let identity = std::env::args()
-        .nth(1)
-        .filter(|identity| !identity.is_empty())
+    // EVERY argument, joined — not argv[1].
+    //
+    // sshd runs a forced command through a shell, so `command="cresset-review-shell jelle via
+    // agent"` reaches this binary as three separate arguments. Reading only the first recorded
+    // comments as "jelle": the identity was pinned correctly and then truncated here, which is
+    // worse than a missing feature because the attribution looked plausible.
+    //
+    // The integration test missed it by invoking the binary directly with one argument
+    // containing spaces, which is the one thing the real path never does. It now passes the
+    // words separately, the way sshd does.
+    let identity = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+    let identity = Some(identity)
+        .filter(|identity| !identity.trim().is_empty())
         .context("no identity: this binary is an ssh forced command and is not useful by hand")?;
 
     // Whatever the client sent. Split on whitespace and matched against a fixed set — never
@@ -53,6 +63,20 @@ fn run() -> Result<()> {
             let patch_set = detail["current"]["commit_id"]
                 .as_str()
                 .context("the change has no current patch set to answer against")?;
+
+            // Say which patch set this is being recorded against, on stderr so it cannot
+            // corrupt the JSON on stdout.
+            //
+            // The viewer serves a SNAPSHOT of the repository, refreshed when a push wakes it.
+            // Replying within a second or two of pushing a new patch set therefore records the
+            // previous one — observed in practice, two replies a second apart landing on
+            // different patch sets. There is nothing to wait for here that would be honest
+            // (the server cannot know a push is in flight), so the answer is to say what was
+            // recorded and let a caller who just pushed notice.
+            eprintln!(
+                "recorded against patch set {}",
+                &patch_set[..12.min(patch_set.len())]
+            );
 
             let mut body = String::new();
             std::io::stdin()

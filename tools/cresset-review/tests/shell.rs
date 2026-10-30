@@ -38,9 +38,15 @@ fn serve_once(body: &'static str) -> (String, mpsc::Receiver<String>) {
     (format!("http://127.0.0.1:{port}"), rx)
 }
 
+/// Invoke the binary the way sshd does.
+///
+/// sshd runs a forced command through a shell, so `command="... jelle via agent"` arrives as
+/// SEPARATE arguments. Passing the identity as one argument containing spaces — which is what
+/// this helper used to do — is the one thing the real path never does, and it hid a bug that
+/// recorded every agent comment under a person's name.
 fn shell(api: &str, identity: &str, original: &str, stdin: Option<&str>) -> (bool, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_cresset-review-shell"))
-        .arg(identity)
+        .args(identity.split_whitespace())
         .env("CRESSET_VIEW_URL", api)
         .env("SSH_ORIGINAL_COMMAND", original)
         .stdin(if stdin.is_some() {
