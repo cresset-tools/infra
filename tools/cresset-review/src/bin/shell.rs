@@ -177,15 +177,13 @@ fn wait(client: &Client, change: &str, seconds: u64) -> Result<i32> {
     let started = Instant::now();
     let deadline = Duration::from_secs(seconds);
 
-    let Some(mut open) = find_open(client, change)? else {
-        // Nothing to read approvals of, so the empty answer is also the honest one.
-        let none = Approvals {
-            rows: Vec::new(),
-            gated: false,
-        };
-        return finish(Ended::Gone, client, change, started, None, &none, &[]);
-    };
+    // Before the queue, so that a change the queue no longer carries is still reported with the
+    // instance's real answer about whether anything enforces an approval. Inventing an empty one
+    // for that case said "this instance gates nothing" on a host that gates everything.
     let mut approvals = read_approvals(client, change)?;
+    let Some(mut open) = find_open(client, change)? else {
+        return finish(Ended::Gone, client, change, started, None, &approvals, &[]);
+    };
     // Comments that already existed are not news. An agent that has just pushed a revision and
     // answered every thread would otherwise be woken immediately by the remarks it had just
     // dealt with, which is the one behaviour that would make this verb useless.
@@ -379,7 +377,10 @@ fn finish(
         .rows
         .iter()
         .filter(|approval| !approval.patch_id.is_empty())
-        .partition(|approval| Some(approval.patch_id.as_str()) == current);
+        // When the change has left the queue there is no current diff to compare against, so
+        // every approval on record is reported as itself rather than filed under a version this
+        // can no longer see.
+        .partition(|approval| current.is_none() || Some(approval.patch_id.as_str()) == current);
 
     println!(
         "{}",
@@ -503,8 +504,11 @@ struct WaitResult<'a> {
     gated: bool,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     open: Option<&'a Open>,
+    /// Approvals of the diff this patch set would land — the ones the push gate matches on.
+    /// With no current patch set to compare against (`gone`), every approval on record.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     approvals: Vec<&'a Approval>,
+    /// Approvals of a version that is no longer current, which the gate's answer to is no.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     approvals_of_other_versions: Vec<&'a Approval>,
     #[serde(skip_serializing_if = "<[NewComment]>::is_empty")]

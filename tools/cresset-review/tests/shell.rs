@@ -404,7 +404,7 @@ fn a_reply_from_the_waiting_identity_does_not_end_the_wait() {
 fn a_change_that_has_left_the_queue_ends_the_wait() {
     let (api, _answers) = serve(Answers {
         queue: vec![r#"{"operation_id":"op","stacks":[]}"#.to_owned()],
-        approvals: approvals(&[]),
+        approvals: approvals(&[(COMMIT_1, "p1", "jelle")]),
         threads: threads(&[]),
     });
     let (code, json, err) = run_wait(&api, "jelle via agent", "20", 50);
@@ -413,6 +413,15 @@ fn a_change_that_has_left_the_queue_ends_the_wait() {
     assert!(
         json["note"].as_str().expect("note").contains("landed"),
         "and say what that probably means: {json}"
+    );
+    // Whether this instance can gate a push is a property of the INSTANCE, not of the change.
+    // Reporting a change out of the queue as ungated says the approvals here enforce nothing,
+    // which on the real host is false — observed in the first live run of this verb.
+    assert_eq!(json["gated"], true, "{json}");
+    assert_eq!(
+        json["approvals"][0]["approved_by"], "jelle",
+        "and with no current diff to compare against, every approval on record is reported \
+         rather than filed under some other version: {json}"
     );
 }
 
