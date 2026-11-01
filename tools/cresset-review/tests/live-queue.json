@@ -1,0 +1,39 @@
+{
+ "operation_id": "1beae4ad2aad70c631cc061ed5f85c9c90c63849c3510fb1ea7baa32904de2ed1bf441881fded44a09a1e13235dc4072e1763c9f4f3ad6309907ebf1d7a038f3",
+ "stacks": [
+  {
+   "bookmark": "review/relay-0.1.7",
+   "tip": "221bb7ee723d8a29fa039b84c9522ec11d7bc519",
+   "behind_main": false,
+   "changes": [
+    {
+     "change_id": "orlrylqrpuwokysqotsysunnptltnmxu",
+     "commit_id": "221bb7ee723d8a29fa039b84c9522ec11d7bc519",
+     "description": "feat(infra): deploy bougie-relay 0.1.7, which holds dropped shares for reconnect\n\nPins the relay built from cresset-tools/bougie-relay@bc15bf9b, the export of\nthe share-reconnect changes: a dropped share's URL is held for two minutes\nfor its owner to resume, viewers get a 503 \"reconnecting\" page meanwhile,\nand TCP keepalive notices dead tunnels in about 30 seconds.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n",
+     "author_name": "Jelle Besseling",
+     "authored_at": "2026-11-01T14:32:32+00:00",
+     "patch_sets": 1,
+     "patch_id": "72e577ea7d2ad4bd1e3e761594cdb183ccb168b9",
+     "has_conflict": false
+    }
+   ]
+  },
+  {
+   "bookmark": "review/sconce-custom-domains",
+   "tip": "fc7715801ea4ab64985442e8f70e283dc6fbf8d2",
+   "behind_main": true,
+   "changes": [
+    {
+     "change_id": "tvvoxytqlzmylrotlsppzmqtossvourx",
+     "commit_id": "fc7715801ea4ab64985442e8f70e283dc6fbf8d2",
+     "description": "feat: serve a repository at the root of a custom domain\n\nA registry moving to sconce could not keep its URLs: every repository\nlives under /{org}/{repo}, and the metadata's URLs are built from one\nserver-wide base. Mage-OS users have https://repo.mage-os.org in their\ncomposer.json and its dist URLs in their lock files, so serving Mage-OS\nfrom sconce needs that domain to be the repository.\n\nA repository can now have a custom domain (migration 0059). A request\nwhose Host is that domain reaches the repository's Composer read routes\nat its root: /packages.json, /p2/..., /dist/..., and the imported\nupstream's own dist paths. Every URL in the metadata stays on the domain,\nport included. Access is unchanged: credentials, anonymous access and\nthe update policy apply as on the /{org}/{repo} routes.\n\n- Only those read routes exist on a domain. Publishing, uploads,\n  snapshots and the APIs stay on the main host: anything else is a 404,\n  and a write is a 405.\n- The host is checked before any route matches, since Router::layer\n  runs after matching and would leak the main routes' path parameters\n  into a domain's request. The main host never needs a lookup; other\n  hosts that are not a domain route as before. Only the Host header\n  counts, never X-Forwarded-Host, so a proxy in front must pass it\n  through (bougierepo's nginx does).\n- `sconce repo-domain <org>/<repo> [<host> | --clear]` sets it. A domain\n  is normalised to a bare lowercase hostname, and one hostname serves one\n  repository. Nothing proves the caller controls the domain, so it is an\n  operator command, not a dashboard setting: on a shared deployment a\n  tenant who could claim any hostname could take over a domain its owner\n  later points here. The dashboard shows it, and the repository page's\n  install snippet uses it.\n\nVerified against a local server with real Composer and no credentials:\na repository mirroring repo.mage-os.org, served at\nrepo.mageos.localhost, installs mage-os/language-nl_nl with its lock\nfile's dist URL on that host. repo.mage-os.org's original dist path for\n3.5.0 serves the same bytes as the original (sha1 8c02df89). A publish on\nthe domain is a 405, and with anonymous access off a 401.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n",
+     "author_name": "Jelle Besseling",
+     "authored_at": "2026-10-30T11:10:52+00:00",
+     "patch_sets": 1,
+     "patch_id": "78c6ab171974bdf1132f8ea13d13c26e04ee37d1",
+     "has_conflict": false
+    }
+   ]
+  }
+ ]
+}

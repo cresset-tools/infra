@@ -36,6 +36,17 @@ fn main() {
     let mut ssh = std::process::Command::new("ssh");
     ssh.arg("-o").arg("BatchMode=yes");
 
+    // `wait` holds one connection open for as long as a day with no bytes flowing, so a server
+    // that goes away mid-wait would otherwise leave the caller blocked on a half-open socket
+    // until the kernel gave up — which, for an agent using this as a watcher, is indistinguishable
+    // from a reviewer who has not looked yet. Three minutes of silence and ssh gives up with a
+    // failing status instead. Harmless on the short verbs: nothing is sent while a request is in
+    // flight.
+    ssh.arg("-o")
+        .arg("ServerAliveInterval=30")
+        .arg("-o")
+        .arg("ServerAliveCountMax=6");
+
     // The CLI's own key when it is there. Agents on this box run as the user and would
     // otherwise authenticate with their push key, so everything a machine wrote would carry a
     // person's name. With this key the server attributes it as "jelle via agent" instead.
