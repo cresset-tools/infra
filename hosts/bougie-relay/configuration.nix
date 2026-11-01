@@ -15,11 +15,11 @@
 # wildcards) — the only DNS-01 cert in this fleet; its Cloudflare token comes
 # from sops (../secrets/relay.yaml).
 #
-# LAUNCH POSTURE (interim, until a production sconce with /oauth/introspect
-# exists): DEV_ALLOW_ANONYMOUS. Anyone may VIEW a share (public :443), but the
-# tunnel-ingress port is firewalled to the operator's IP, so only the operator
-# can CREATE shares. Switch to sconce introspection later: drop the anon flag +
-# the tunnel firewall, add BOUGIE_RELAY_SCONCE_URL + BOUGIE_RELAY_INTROSPECT_SECRET.
+# Everything arrives on :443: viewers on `<slug>.bougie.show`, laptops on
+# `tunnel.bougie.show`, told apart by SNI (a separate tunnel port was blocked
+# by networks that only let HTTPS out). Anyone may VIEW a share; CREATING one
+# needs a valid `bougie login` token (introspected against sconce) AND a source
+# address in tunnelAllowFrom, which the relay itself enforces.
 #
 # NB provisioned as x86/cx23 (Hetzner ARM/CAX was capacity-unavailable at
 # launch); the relay is arch-agnostic.
@@ -34,12 +34,12 @@ let
     cargoLock.lockFile = inputs.bougie-relay + "/Cargo.lock";
   };
 
-  # Which source IP may open tunnels (i.e. run `bougie share`). Use the relay's
-  # IPv4 for BOUGIE_SHARE_RELAY so this v4 rule gates you; re-`switch` when your
-  # IP moves. With anonymous share-creation otherwise open, this firewall IS
-  # the create-gate. (62.132.41.81 = dev-debn-02, the first-test share host.)
-  tunnelAllowFrom = "62.132.41.81";
-  tunnelPort = 7443;
+  # Which source addresses may open tunnels (i.e. run `bougie share`), as IPs
+  # or CIDRs; enforced in the relay, which reports a refused client's address
+  # back to it. tunnel.bougie.show is dual-stack, so list your IPv6 prefix as
+  # well as your IPv4. Re-deploy when they move.
+  # (62.132.41.81 = the operator's home NAT: dev-debn-02 and the Mac.)
+  tunnelAllowFrom = [ "62.132.41.81" ];
 
   # Where security.acme (DNS-01) writes the wildcard cert.
   certDir = "/var/lib/acme/bougie.show";
@@ -70,18 +70,9 @@ in
     defaultGateway6 = { address = "fe80::1"; interface = "enp1s0"; };
     firewall = {
       enable = true;
-      # 443 open to the world (share viewers, dual-stack). SSH for the operator.
+      # 443 open to the world (share viewers and tunnels, dual-stack). SSH for
+      # the operator.
       allowedTCPPorts = [ 22 443 ];
-      # Tunnel ingress: only the operator's IP may open tunnels. NOT in
-      # allowedTCPPorts, so it's default-dropped except this v4 accept. The
-      # tunnel listener binds v4-only (0.0.0.0) below, so there's no
-      # unfirewalled v6 path to it.
-      extraCommands = ''
-        iptables -A nixos-fw -p tcp --dport ${toString tunnelPort} -s ${tunnelAllowFrom} -j nixos-fw-accept
-      '';
-      extraStopCommands = ''
-        iptables -D nixos-fw -p tcp --dport ${toString tunnelPort} -s ${tunnelAllowFrom} -j nixos-fw-accept || true
-      '';
     };
   };
 
@@ -157,17 +148,17 @@ in
       EnvironmentFile = [ config.sops.templates."relay.env".path ];
       Environment = [
         "BOUGIE_RELAY_DOMAIN=bougie.show"
-        # Public HTTPS: dual-stack so viewers reach it over v4 or v6.
+        # Dual-stack; viewers and tunnels both, routed by SNI.
         "BOUGIE_RELAY_PUBLIC_ADDR=[::]:443"
-        # Tunnel ingress: v4-only, so the v4 iptables rule fully gates it.
-        "BOUGIE_RELAY_TUNNEL_ADDR=0.0.0.0:${toString tunnelPort}"
+        "BOUGIE_RELAY_TUNNEL_HOST=tunnel.bougie.show"
+        "BOUGIE_RELAY_TUNNEL_ALLOW_FROM=${lib.concatStringsSep "," tunnelAllowFrom}"
         "BOUGIE_RELAY_CERT=${certDir}/fullchain.pem"
         "BOUGIE_RELAY_KEY=${certDir}/key.pem"
         # Share *creation* now requires a valid `bougie login` token: the relay
         # introspects it against the production identity at app.bougie.cloud (the
         # Bougie Cloud console — sconce's /oauth/introspect; the secret comes
-        # from EnvironmentFile above). The tunnel firewall stays as a second
-        # layer.
+        # from EnvironmentFile above). The tunnelAllowFrom check stays as a
+        # second layer.
         "BOUGIE_RELAY_SCONCE_URL=https://app.bougie.cloud"
         "RUST_LOG=info"
       ];
