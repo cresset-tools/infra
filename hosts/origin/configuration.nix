@@ -286,10 +286,10 @@
   };
 
   # Journal cap so logs don't fill the disk on a low-touch box.
-  services.journald.extraConfig = ''
-    SystemMaxUse=1G
-    MaxRetentionSec=2week
-  '';
+  services.journald.settings.Journal = {
+    SystemMaxUse = "1G";
+    MaxRetentionSec = "2week";
+  };
 
   # ---- Tools handy on the box ----
   environment.systemPackages = with pkgs; [

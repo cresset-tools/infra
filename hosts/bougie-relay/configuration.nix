@@ -203,10 +203,10 @@ in
     rebootWindow = { lower = "04:30"; upper = "06:30"; };
   };
 
-  services.journald.extraConfig = ''
-    SystemMaxUse=512M
-    MaxRetentionSec=2week
-  '';
+  services.journald.settings.Journal = {
+    SystemMaxUse = "512M";
+    MaxRetentionSec = "2week";
+  };
 
   environment.systemPackages = with pkgs; [ curl jq htop ];
 

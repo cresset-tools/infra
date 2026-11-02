@@ -69,9 +69,9 @@
     };
   };
 
-  services.journald.extraConfig = ''
-    SystemMaxUse=500M
-  '';
+  services.journald.settings.Journal = {
+    SystemMaxUse = "500M";
+  };
 
   system.stateVersion = "25.11";
 }

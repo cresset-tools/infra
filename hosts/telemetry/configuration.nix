@@ -210,10 +210,10 @@ in
     rebootWindow = { lower = "03:30"; upper = "05:30"; };
   };
 
-  services.journald.extraConfig = ''
-    SystemMaxUse=512M
-    MaxRetentionSec=2week
-  '';
+  services.journald.settings.Journal = {
+    SystemMaxUse = "512M";
+    MaxRetentionSec = "2week";
+  };
 
   environment.systemPackages = with pkgs; [
     curl jq htop sqlite
