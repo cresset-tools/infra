@@ -20,12 +20,12 @@
     "bougie-relay": {
       "flake": false,
       "locked": {
-        "lastModified": 1793543491,
-        "narHash": "sha256-O3N+T55Q0fXJOhyTMLMCYu4vH5ic7Pu0prmu4naBQmw=",
-        "rev": "bc15bf9bdc6667ba52f15c17bcfab3554e9d9c02",
-        "revCount": 7,
+        "lastModified": 1793606173,
+        "narHash": "sha256-SN5/yaUoVR1I+bdSYVWNO+JZomonLOefZwsfRNxDlgY=",
+        "rev": "6f772df05a74dba945fc659a4a7827e23102e1e1",
+        "revCount": 8,
         "type": "tarball",
-        "url": "https://api.flakehub.com/f/pinned/cresset-tools/bougie-relay/0.1.7%2Brev-bc15bf9bdc6667ba52f15c17bcfab3554e9d9c02/01a19786-4583-7fe3-a8c0-313b01097919/source.tar.gz"
+        "url": "https://api.flakehub.com/f/pinned/cresset-tools/bougie-relay/0.1.8%2Brev-6f772df05a74dba945fc659a4a7827e23102e1e1/01a19b42-bb8a-72a2-8e12-072bce1b01a6/source.tar.gz"
       },
       "original": {
         "type": "tarball",
