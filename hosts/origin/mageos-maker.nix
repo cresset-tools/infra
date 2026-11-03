@@ -48,12 +48,14 @@ let
   # composer/npm deps — composer.lock / package-lock.json unchanged, so
   # vendorHash + npmDepsHash below stay put — only rev + hash move. (Bump
   # with scripts/update-mageos-maker.sh.) On top of b4d2565: 0ac0998
-  # (register the modulargento 3.2.0 distribution in the version overlay).
+  # (register the modulargento 3.2.0 distribution in the version overlay)
+  # and bd9f154 (Loki Checkout now installs from Packagist; Nebula from
+  # qoliber's keyed registry as nebula/admin).
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "0ac0998fdd15f6ae86ca5886cb4ba8a8b5c951ee";
-    hash = "sha256-RM1MKUwVEJcDYicx8tuwyQ4GPwu9uOUKTo8lXT1M+lk=";
+    rev = "bd9f15422d63a8ae7cb086d7123a9d5cefa13b7b";
+    hash = "sha256-FAqWRD+I0kwzZD91I40nru0nusg+LPN+27L8g1Qk1PQ=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
