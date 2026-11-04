@@ -201,6 +201,20 @@ in
     options = [ "bind" "nofail" ];
   };
 
+  # NixOS's usrbinenv activation step writes /usr/bin/env, which fails on
+  # the read-only bind mount above and makes every switch — including the
+  # weekly autoUpgrade — exit non-zero. The mount already provides env
+  # (coreutils), so only do the stock step when /usr/bin isn't mounted,
+  # e.g. early in boot before the bind mount is up.
+  system.activationScripts.usrbinenv = lib.mkForce ''
+    if ! mountpoint -q /usr/bin; then
+      mkdir -p /usr/bin
+      chmod 0755 /usr/bin
+      ln -sfn ${pkgs.coreutils}/bin/env /usr/bin/.env.tmp
+      mv /usr/bin/.env.tmp /usr/bin/env
+    fi
+  '';
+
   programs.ssh.knownHosts.github = {
     hostNames = [ "github.com" ];
     publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
