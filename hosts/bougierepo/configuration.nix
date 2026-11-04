@@ -13,76 +13,19 @@
 # The sconce OCI image is the one cresset-tools/sconce publishes to GHCR on every
 # release (multi-arch, provenance-attested), pulled by the rolling `latest` tag
 # and run under rootful podman with --network=host, reaching postgres on
-# 127.0.0.1. nginx terminates TLS and proxies to two copies of sconce (API :8080 and :8090).
+# 127.0.0.1. nginx terminates TLS and proxies to the sconce API on 127.0.0.1:8080.
 #
 # Deliberately NOT pinned here: this used to be a Nix build off a hand-written
 # `rev`/`hash` in ../../demo-images.nix, which `update-flake-lock` cannot see, so
 # it silently rotted (the console served branding that had been removed two weeks
 # earlier). Releasing sconce is now the whole deploy: release-please cuts the tag,
 # build-docker.yml publishes it, and this host picks it up on the next restart of
-# `sconce-rollout`, one copy at a time. Rollback = point `image` at an explicit version tag.
+# podman-sconce.service. Rollback = point `image` at an explicit version tag.
 #
 # Secrets come from sops-nix (../../secrets/bougierepo.yaml, decrypted at
 # activation with this box's SSH host key). Nothing secret lands in the Nix
 # store or git.
 { config, pkgs, lib, inputs, ... }:
-let
-  sconceContainer = { wire, ui, worker }: {
-    image = "ghcr.io/cresset-tools/sconce:latest";
-    # Re-resolve the rolling tag on every service start, so restarting the
-    # unit (or rebooting the box) is what rolls a new sconce release out.
-    # Without this podman keeps whatever it pulled first and `latest` would
-    # be a lie after the first start.
-    #
-    # `newer`, not `always`: both pick up a new release, but `always` makes a
-    # reachable GHCR a hard precondition for starting — a registry outage or
-    # a network blip during a reboot would leave the box's own registry down
-    # with a perfectly good image sitting in local storage. `newer` pulls when
-    # it can and falls back to that local image when it cannot.
-    pull = "newer";
-    autoStart = true;
-    # Time to drain on stop before podman kills it: a large dist download
-    # in flight gets a minute to finish.
-    extraOptions = [ "--network=host" "--stop-timeout=60" ];
-    # Registry/identity split (brand: registry = bougierepo.com, identity /
-    # console = bougie.cloud). One sconce process: the Composer wire server on
-    # :8080 (`--base-url` = the registry origin — drives packages.json + dist
-    # URLs and the repo URLs `bougie login` writes into projects) plus the
-    # dashboard UI on :8081 (`--ui-listen`). `SCONCE_UI_BASE_URL` (in
-    # sconce-env) points the UI self-links + the device-flow verification URL
-    # at bougie.cloud. Both bind loopback-only; nginx fans the two vhosts in.
-    # (Overrides the image default `--base-url https://repo.bougie.tools`.)
-    cmd = [
-      "serve"
-      "--cas" "/var/lib/sconce/cas"
-      "--listen" "127.0.0.1:${toString wire}"
-      "--ui-listen" "127.0.0.1:${toString ui}"
-      "--base-url" "https://bougierepo.com"
-    ] ++ lib.optional (!worker) "--no-worker";
-    volumes = [ "/var/lib/sconce/cas:/var/lib/sconce/cas" ];
-    environmentFiles = [ config.sops.templates."sconce-env".path ];
-    # Identity/console origin (not secret): the UI's self-links + the
-    # device-flow verification URL resolve to app.bougie.cloud (the console
-    # subdomain; the bougie.cloud apex is the marketing landing), while
-    # --base-url keeps registry/dist URLs on bougierepo.com.
-    environment.SCONCE_UI_BASE_URL = "https://app.bougie.cloud";
-  };
-
-  sconceUnit = {
-    after = [ "postgresql.service" "bougierepo-postgres-password.service" ];
-    requires = [ "bougierepo-postgres-password.service" ];
-    # oci-containers' own TimeoutStopSec (120 s) outlasts --stop-timeout, so
-    # systemd never kills a copy that is still draining.
-  };
-
-  # How long nginx leaves a copy alone after a failed connection. The rollout
-  # waits this out after each copy is healthy again: restarting the next copy
-  # sooner leaves nginx with both marked down, answering "no live upstreams".
-  failTimeout = 5;
-
-  wirePorts = [ 8080 8090 ];
-  uiPorts = [ 8081 8091 ];
-in
 {
   imports = [
     inputs.sops-nix.nixosModules.sops
@@ -249,54 +192,53 @@ in
   virtualisation.podman.enable = true;
   virtualisation.oci-containers = {
     backend = "podman";
-    # Two copies of the same image behind nginx, so a release rolls out one at
-    # a time (`sconce-rollout`, below) without refusing a request: the copy
-    # being replaced drains its requests in flight and closes its listener,
-    # and nginx sends new connections to the other. Both run migrations on
-    # start (advisory-locked), so the older release runs against the new
-    # schema for a while; sconce's migrations/README.md says what that allows.
-    # Only copy A runs the background worker.
-    containers.sconce = sconceContainer { wire = 8080; ui = 8081; worker = true; };
-    containers.sconce-b = sconceContainer { wire = 8090; ui = 8091; worker = false; };
+    containers.sconce = {
+      image = "ghcr.io/cresset-tools/sconce:latest";
+      # Re-resolve the rolling tag on every service start, so restarting the
+      # unit (or rebooting the box) is what rolls a new sconce release out.
+      # Without this podman keeps whatever it pulled first and `latest` would
+      # be a lie after the first start.
+      #
+      # `newer`, not `always`: both pick up a new release, but `always` makes a
+      # reachable GHCR a hard precondition for starting — a registry outage or
+      # a network blip during a reboot would leave the box's own registry down
+      # with a perfectly good image sitting in local storage. `newer` pulls when
+      # it can and falls back to that local image when it cannot.
+      pull = "newer";
+      autoStart = true;
+      extraOptions = [ "--network=host" ];
+      # Registry/identity split (brand: registry = bougierepo.com, identity /
+      # console = bougie.cloud). One sconce process: the Composer wire server on
+      # :8080 (`--base-url` = the registry origin — drives packages.json + dist
+      # URLs and the repo URLs `bougie login` writes into projects) plus the
+      # dashboard UI on :8081 (`--ui-listen`). `SCONCE_UI_BASE_URL` (in
+      # sconce-env) points the UI self-links + the device-flow verification URL
+      # at bougie.cloud. Both bind loopback-only; nginx fans the two vhosts in.
+      # (Overrides the image default `--base-url https://repo.bougie.tools`.)
+      cmd = [
+        "serve"
+        "--cas" "/var/lib/sconce/cas"
+        "--listen" "127.0.0.1:8080"
+        "--ui-listen" "127.0.0.1:8081"
+        "--base-url" "https://bougierepo.com"
+      ];
+      volumes = [ "/var/lib/sconce/cas:/var/lib/sconce/cas" ];
+      environmentFiles = [ config.sops.templates."sconce-env".path ];
+      # Identity/console origin (not secret): the UI's self-links + the
+      # device-flow verification URL resolve to app.bougie.cloud (the console
+      # subdomain; the bougie.cloud apex is the marketing landing), while
+      # --base-url keeps registry/dist URLs on bougierepo.com.
+      environment.SCONCE_UI_BASE_URL = "https://app.bougie.cloud";
+    };
   };
 
   # Order the container after postgres + the password oneshot so sconce never
   # connects before its DB user exists. `after` on postgresql is ordering-only;
   # the hard dependency is on the password oneshot this config owns.
-  systemd.services.podman-sconce = sconceUnit;
-  systemd.services.podman-sconce-b = sconceUnit;
-
-  # Roll a sconce release out without downtime: restart each copy in turn
-  # (pulling the new `latest`), waiting until it answers /healthz, and then
-  # until nginx sends it traffic again, before touching the next. Run on the
-  # host: `sconce-rollout`.
-  environment.systemPackages = with pkgs; [
-    curl
-    jq
-    htop
-    (writeShellApplication {
-      name = "sconce-rollout";
-      runtimeInputs = [ curl systemd ];
-      text = ''
-        for copy in sconce:8080 sconce-b:8090; do
-          unit="podman-''${copy%%:*}"
-          port="''${copy##*:}"
-          echo "restarting $unit"
-          systemctl restart "$unit"
-          for _ in $(seq 1 120); do
-            if curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz"; then
-              echo "$unit is healthy; waiting for nginx to use it again"
-              sleep ${toString (failTimeout + 1)}
-              continue 2
-            fi
-            sleep 1
-          done
-          echo "$unit did not become healthy; stopping the rollout" >&2
-          exit 1
-        done
-      '';
-    })
-  ];
+  systemd.services.podman-sconce = {
+    after = [ "postgresql.service" "bougierepo-postgres-password.service" ];
+    requires = [ "bougierepo-postgres-password.service" ];
+  };
 
   # ---- nginx: TLS termination + reverse proxy ----
   security.acme = {
@@ -311,15 +253,6 @@ in
     recommendedGzipSettings = true;
     recommendedProxySettings = true; # Host + X-Forwarded-* to the upstream
 
-    # Both sconce copies. A copy that is restarting refuses connections; nginx
-    # then tries the other (proxy_next_upstream's default `error timeout`,
-    # which retries even a POST when it was never sent) and leaves the failed
-    # one alone for a few seconds.
-    upstreams.sconce-wire.servers = lib.genAttrs (map (p: "127.0.0.1:${toString p}") wirePorts)
-      (_: { max_fails = 1; fail_timeout = "${toString failTimeout}s"; });
-    upstreams.sconce-ui.servers = lib.genAttrs (map (p: "127.0.0.1:${toString p}") uiPorts)
-      (_: { max_fails = 1; fail_timeout = "${toString failTimeout}s"; });
-
     # The Composer repo server. Composer uploads/dist can be large; sconce
     # streams from the CAS, so give it generous body headroom.
     virtualHosts."bougierepo.com" = {
@@ -330,7 +263,7 @@ in
       # real registry path (/{org}/{repo}/…, /api, /oauth, /dist, /p2) stays on
       # sconce — the exact-match `= /` only catches the apex.
       locations."= /".return = "302 https://bougie.cloud";
-      locations."/".proxyPass = "http://sconce-wire";
+      locations."/".proxyPass = "http://127.0.0.1:8080";
     };
 
     # Mage-OS trial: a sconce repository served at this domain's root (sconce's
@@ -342,18 +275,7 @@ in
     virtualHosts."mageos.bougierepo.com" = {
       enableACME = true;
       forceSSL = true;
-      locations."/".proxyPass = "http://sconce-wire";
-    };
-
-    # Modulargento's Composer repository: the sconce repository
-    # modulargento/releases, served at this domain's root like the Mage-OS
-    # trial above. It took over from the static satis output on the origin
-    # host; the earlier releases were mirrored with their exact bytes and
-    # paths, so existing lock files keep installing.
-    virtualHosts."modulargento.cresset.tools" = {
-      enableACME = true;
-      forceSSL = true;
-      locations."/".proxyPass = "http://sconce-wire";
+      locations."/".proxyPass = "http://127.0.0.1:8080";
     };
 
     # Apex bougie.cloud = the marketing landing (static, served from ./landing).
@@ -370,8 +292,8 @@ in
     virtualHosts."app.bougie.cloud" = {
       enableACME = true;
       forceSSL = true;
-      locations."/oauth/".proxyPass = "http://sconce-wire";
-      locations."/".proxyPass = "http://sconce-ui";
+      locations."/oauth/".proxyPass = "http://127.0.0.1:8080";
+      locations."/".proxyPass = "http://127.0.0.1:8081";
     };
   };
 
@@ -388,6 +310,7 @@ in
     MaxRetentionSec = "2week";
   };
 
+  environment.systemPackages = with pkgs; [ curl jq htop ];
 
   # Pin to the version first deployed against; don't bump on upgrades.
   system.stateVersion = "25.11";
