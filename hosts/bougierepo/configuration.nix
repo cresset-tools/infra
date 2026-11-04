@@ -278,6 +278,17 @@
       locations."/".proxyPass = "http://127.0.0.1:8080";
     };
 
+    # Modulargento's Composer repository: the sconce repository
+    # modulargento/releases, served at this domain's root like the Mage-OS
+    # trial above. It took over from the static satis output on the origin
+    # host; the earlier releases were mirrored with their exact bytes and
+    # paths, so existing lock files keep installing.
+    virtualHosts."modulargento.cresset.tools" = {
+      enableACME = true;
+      forceSSL = true;
+      locations."/".proxyPass = "http://127.0.0.1:8080";
+    };
+
     # Apex bougie.cloud = the marketing landing (static, served from ./landing).
     virtualHosts."bougie.cloud" = {
       enableACME = true;
