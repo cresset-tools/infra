@@ -107,13 +107,9 @@ let
     git push origin mageos-testing --force-with-lease -q \
         || echo "warning: could not push mageos-testing to fork"
 
-    # The branch keeps composer.json/composer.lock identical to upstream —
-    # any edit of ours conflicts on composer.lock's content-hash whenever
-    # upstream changes dependencies. PHP version and services come from
-    # the branch's bougie.toml; imagick (image tests) can only be enabled
-    # through composer.json, so add it here, after the rebase and push,
-    # and leave it uncommitted. The next run's reset --hard discards it.
-    bougie ext add imagick
+    # (php 8.4 pin is committed in the branch's composer.json —
+    # config.platform.php — so no `bougie php pin` here: it rewrites
+    # composer.json formatting and dirties the tree.)
     bougie sync
     # Services may be down after an unattended reboot.
     bougie service up
@@ -200,20 +196,6 @@ in
     fsType = "none";
     options = [ "bind" "nofail" ];
   };
-
-  # NixOS's usrbinenv activation step writes /usr/bin/env, which fails on
-  # the read-only bind mount above and makes every switch — including the
-  # weekly autoUpgrade — exit non-zero. The mount already provides env
-  # (coreutils), so only do the stock step when /usr/bin isn't mounted,
-  # e.g. early in boot before the bind mount is up.
-  system.activationScripts.usrbinenv = lib.mkForce ''
-    if ! mountpoint -q /usr/bin; then
-      mkdir -p /usr/bin
-      chmod 0755 /usr/bin
-      ln -sfn ${pkgs.coreutils}/bin/env /usr/bin/.env.tmp
-      mv /usr/bin/.env.tmp /usr/bin/env
-    fi
-  '';
 
   programs.ssh.knownHosts.github = {
     hostNames = [ "github.com" ];
