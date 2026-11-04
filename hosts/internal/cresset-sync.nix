@@ -467,58 +467,6 @@ in
     };
   };
 
-  # Close out the downstream branches of changes that are no longer under review.
-  #
-  # The counterpart to submit, and the only unit here that DELETES on a public repository with
-  # nobody watching. What makes that safe is in the code, not here: a branch is kept only by
-  # being in the set `submit` would push on the same pass, any error building that set aborts
-  # the pass rather than acting on a partial answer, and an implausibly large verdict is refused
-  # rather than carried out. See `operations/sync/src/review_cleanup.rs`.
-  #
-  # It needs no argument. It reads what exists downstream and compares it against what is under
-  # review, which is the only shape that copes with an abandoned change: that leaves nothing in
-  # the monorepo to iterate over, and the downstream branch name is the last record of it.
-  systemd.services.cresset-sync-cleanup = {
-    description = "Close out the review branches of changes no longer under review";
-    after = [ "srv.mount" ];
-    unitConfig.RequiresMountsFor = "/srv";
-    path = [ pkgs.git pkgs.jujutsu ];
-    serviceConfig = {
-      Type = "oneshot";
-      User = "cresset-sync";
-      Group = "cresset-sync";
-      EnvironmentFile = config.sops.templates."cresset-sync.env".path;
-      ExecStart = "${cresset-sync}/bin/cresset-sync --repo-root /srv/sync/jj-workspace --db /srv/sync/state.db cleanup --apply";
-    };
-  };
-
-  systemd.paths.cresset-sync-cleanup = {
-    description = "Clean up as soon as a change lands or a review bookmark is deleted";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "srv.mount" ];
-    unitConfig.RequiresMountsFor = "/srv";
-    pathConfig = {
-      # PathModified, not PathChanged: `touch` on an existing file is a write-and-close, which
-      # PathChanged does not report. The same distinction that made the viewer refresh work.
-      PathModified = "/srv/git/.cleanup-requested";
-      Unit = "cresset-sync-cleanup.service";
-    };
-  };
-
-  # A net under the hook. Hourly rather than every ten minutes like submit: the hook fires on
-  # the two events that create work here — a landing and a bookmark deletion — and a closed
-  # pull request arriving an hour late costs nothing, while the pass itself is an ls-remote
-  # against every project. Nothing downstream is waiting on this.
-  systemd.timers.cresset-sync-cleanup = {
-    description = "Catch up anything the push hook did not manage to clean up";
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnCalendar = "hourly";
-      Persistent = true;
-      RandomizedDelaySec = "300s";
-    };
-  };
-
   # Read back what CI said about every change under review, into the file cresset-view reads.
   #
   # A file rather than a GitHub call from the viewer: cresset-view is reachable from a browser
@@ -537,12 +485,11 @@ in
       User = "cresset-sync";
       Group = "cresset-sync";
       EnvironmentFile = config.sops.templates."cresset-sync.env".path;
-      # Its own directory, owned by this user. Writing it beside the approvals file did not
-      # work: that directory is group `git` mode 2750, so this service could read it and not
-      # create anything in it, and the unit failed every two minutes for five days. See the
-      # tmpfiles rule in configuration.nix for why widening that directory is the wrong fix.
-      ReadWritePaths = [ "/var/lib/cresset-sync" ];
-      ExecStart = "${cresset-sync}/bin/cresset-sync --repo-root /srv/sync/jj-workspace --db /srv/sync/state.db checks --out /var/lib/cresset-sync/checks.json";
+      # The snapshot lives beside the approvals file, in the directory cresset-view already
+      # reads. cresset-sync writes it; the setgid bit on that directory is what makes it
+      # readable by the other side.
+      ReadWritePaths = [ "/var/lib/cresset-review" ];
+      ExecStart = "${cresset-sync}/bin/cresset-sync --repo-root /srv/sync/jj-workspace --db /srv/sync/state.db checks --out /var/lib/cresset-review/checks.json";
     };
   };
 

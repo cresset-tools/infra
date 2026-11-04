@@ -252,9 +252,6 @@ ${lib.concatMapStringsSep "\n" (path: "      git config --file ${bareRepo}/confi
       # here for the same reason: systemd watches a path, and a file that has never existed
       # makes the first push after a deploy the one nothing hears.
       install -o git -g git -m 0644 /dev/null ${gitHome}/.submit-requested
-      # And the one that asks for the downstream branches of changes that are no longer under
-      # review to be closed out. Same reason again.
-      install -o git -g git -m 0644 /dev/null ${gitHome}/.cleanup-requested
 
       # Belt-and-braces: keep the whole tree git-owned across redeploys (a push
       # or the local worker advance may have created objects as `git`).
