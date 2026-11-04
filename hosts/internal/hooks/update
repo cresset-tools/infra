@@ -5,8 +5,7 @@ set -eu
 #
 # Landing here is what publishes: the sync worker exports this branch to 31 GitHub
 # repositories, 27 of them public, on a five-minute timer. There is no other gate. So this hook
-# enforces two things about the branch, and nothing about any other ref — with one carve-out,
-# for subtrees named in the configuration.
+# enforces two things about the branch, and nothing about any other ref.
 #
 # 1. It only moves forward. A checkpoint is a pair (downstream SHA, monorepo commit) and is
 #    meaningless the moment that commit stops being an ancestor of main; the worker never
@@ -18,10 +17,6 @@ set -eu
 #    review this repository exists to support, in order to protect one ref.
 #
 # 2. Every commit it adds has been read by someone. That is the part this hook exists for now.
-#    Unless every path that commit touches is under a `cresset.ungatedPath` prefix — a subtree
-#    whose typos nobody wants to review. Per commit and all-or-nothing: a commit touching an
-#    ungated path *and* anything else is an ordinary commit needing approval, because what
-#    publishes is the commit, not the path.
 #
 # Runs as the `git` user inside receive-pack, so it has no jj, no network, and no database. It
 # reads a flat file that cresset-view projects from the review store; see
@@ -38,22 +33,6 @@ zero=0000000000000000000000000000000000000000
 approvals=$(git config --default /var/lib/cresset-review/approved cresset.approvalsFile)
 breakGlass=$(git config --default /srv/git/break-glass cresset.breakGlassFile)
 reviewUrl=$(git config --default https://code.cresset.tools cresset.reviewUrl)
-
-# Directory prefixes whose commits land without an approval. Empty by default, so a repository
-# that has never heard of this gates everything; `--get-all` exits 1 when there are none, which
-# is not an error here.
-mapfile -t ungatedPaths < <(git config --get-all cresset.ungatedPath || true)
-for prefix in ${ungatedPaths[@]+"${ungatedPaths[@]}"}; do
-  case "$prefix" in
-    "" | . | .. | /* | ./* | ../* | *..*)
-      # A prefix that could exempt the whole repository is the one misconfiguration nobody
-      # would notice by reading a refusal, because there would not be one. So stop instead.
-      echo "refusing to run: cresset.ungatedPath=$prefix is not a repository-relative" >&2
-      echo "subdirectory, and this gate will not guess what it was meant to exempt." >&2
-      exit 1
-      ;;
-  esac
-done
 
 if [ "$new" = "$zero" ]; then
   echo "refusing to delete $ref: it is the canonical branch the synchronizer exports from" >&2
@@ -86,43 +65,7 @@ else
   readable=yes
 fi
 
-# Whether every path `sha` touches lies inside an ungated prefix, and how many there are.
-#
-# Only ever called on a commit the loop below has already established is not a merge: a merge
-# prints no diff without -m, so it would read here as touching no path at all and carry
-# whatever it merges in with it. A commit that touches nothing is not exempt either — fail
-# closed rather than reason about whether an empty commit could matter.
-ungatedCount=0
-is_ungated() {
-  local sha="$1" paths path prefix inside
-  [ ${#ungatedPaths[@]} -gt 0 ] || return 1
-  paths=$(git diff-tree -r --no-commit-id --name-only "$sha")
-  [ -n "$paths" ] || return 1
-  ungatedCount=$(printf '%s\n' "$paths" | wc -l)
-  while IFS= read -r path; do
-    inside=no
-    for prefix in "${ungatedPaths[@]}"; do
-      # The slash is the point: `experiments` must not exempt `experimentsx/`.
-      case "$path" in "${prefix%/}"/*) inside=yes; break ;; esac
-    done
-    [ "$inside" = yes ] || return 1
-  done <<<"$paths"
-  return 0
-}
-
-# Said out loud rather than logged quietly: work reaching this branch without anyone reading it
-# is the thing this hook exists to make visible, even when it is exactly what was asked for.
-# Called only where the push is allowed, so the journal records landings and not attempts.
-announce_ungated() {
-  [ -n "$ungated" ] || return 0
-  echo "landing without review — every path these commits touch is ungated:" >&2
-  printf '%s' "$ungated" >&2
-  logger -t cresset-canonical -p auth.notice \
-    "ungated commits landed on main: $(printf '%s' "$ungated" | tr '\n\t' '  ')" 2>/dev/null || true
-}
-
 unapproved=""
-ungated=""
 for sha in $(git rev-list "$old..$new"); do
   # The jj change id is an ordinary commit header, so plain git can read it. `/^$/q` stops at
   # the blank line ending the header block, so a commit message that happens to contain a line
@@ -157,15 +100,6 @@ for sha in $(git rev-list "$old..$new"); do
     continue
   fi
 
-  # The carve-out, placed after the two checks above rather than before them: a merge cannot
-  # say what it changes, and a commit with no change id is not addressable afterwards. Neither
-  # is about having read the commit, so neither is waived here — only the approval is.
-  if is_ungated "$sha"; then
-    ungated="$ungated$(git rev-parse --short "$sha")	$cid	$ungatedCount ungated path(s)
-"
-    continue
-  fi
-
   diff=$(git diff-tree -p --no-commit-id "$sha")
   if [ -z "$diff" ]; then
     # Not 40 hex characters, so it can never collide with a real patch id. Must match EMPTY in
@@ -191,7 +125,6 @@ for sha in $(git rev-list "$old..$new"); do
 done
 
 if [ -z "$unapproved" ]; then
-  announce_ungated
   exit 0
 fi
 
@@ -206,7 +139,6 @@ if [ -e "$breakGlass" ]; then
   # Also to the journal, where it outlives the pusher's terminal.
   logger -t cresset-canonical -p auth.warning \
     "break-glass consumed: unapproved commits pushed to main" 2>/dev/null || true
-  announce_ungated
   exit 0
 fi
 
