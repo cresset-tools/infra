@@ -221,6 +221,24 @@ in
     # there without creating it, so this does not depend on cresset-view restarting after
     # tmpfiles — an ordering that is true today and is not worth relying on.
     "z /var/lib/cresset-review/approved 0640 cresset-view git -"
+    # The CI snapshot, which the WORKER writes and the viewer reads, gets its own directory.
+    #
+    # It used to live beside the approvals file, on the belief that the setgid bit above was
+    # enough to let both sides use that directory. It is not: setgid sets the GROUP of new
+    # files, it does not add the group write bit, so 2750 gives `git` — and therefore
+    # cresset-sync, which is in that group — read and traverse but no way to create a file.
+    # `cresset-sync-checks` had been failing every two minutes since 2026-10-30 with
+    # `Permission denied (os error 13)`, and the viewer had no CI data at all for five days.
+    #
+    # The repair is not to make that directory group-writable. The group there is `git`,
+    # which is the user the push hook runs as, and the gate's premise is that the hook can
+    # read the approvals file and cannot write it. So the snapshot moves to a directory owned
+    # by the process that writes it, with the group that already reads it: cresset-view is a
+    # member of cresset-sync for the checkpoint database, so this grants nobody anything new.
+    #
+    # No setgid here, unlike above: the writer's own primary group IS this directory's group,
+    # so new files land in it without help.
+    "d /var/lib/cresset-sync 0750 cresset-sync cresset-sync -"
   ];
 
   systemd.services.cresset-view = {
@@ -256,7 +274,7 @@ in
       # holds it, and that is deliberately survivable rather than fatal. If it proves flaky in
       # practice, the fix is for the worker to write a small JSON snapshot after each pass and
       # for this to read that instead — a plain file read has none of these problems.
-      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080 --sync-db /srv/sync/state.db --review-db /var/lib/cresset-view/review.db --approvals-file /var/lib/cresset-review/approved --checks-file /var/lib/cresset-review/checks.json --merge-remote git@localhost:cresset.git --merge-ssh-key ${config.sops.secrets."cresset_view/merge_ssh_key".path}";
+      ExecStart = "${cressetView}/bin/cresset-view --repository /var/lib/cresset-view/repository/current --assets ${cressetView}/share/cresset-view --listen 127.0.0.1:9080 --sync-db /srv/sync/state.db --review-db /var/lib/cresset-view/review.db --approvals-file /var/lib/cresset-review/approved --checks-file /var/lib/cresset-sync/checks.json --merge-remote git@localhost:cresset.git --merge-ssh-key ${config.sops.secrets."cresset_view/merge_ssh_key".path}";
       Restart = "on-failure";
       RestartSec = "3s";
       NoNewPrivileges = true;
@@ -264,7 +282,7 @@ in
       PrivateDevices = true;
       ProtectHome = true;
       ProtectSystem = "strict";
-      ReadOnlyPaths = [ "/var/lib/cresset-view/repository/current" "/srv/sync" ];
+      ReadOnlyPaths = [ "/var/lib/cresset-view/repository/current" "/srv/sync" "/var/lib/cresset-sync" ];
       # The review store and the approvals projection are the only things this service
       # writes. Narrow on purpose: the repository stays read-only above, so a defect in the
       # review code cannot reach the thing being reviewed.
