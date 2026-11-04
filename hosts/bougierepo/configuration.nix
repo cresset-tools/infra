@@ -266,6 +266,18 @@
       locations."/".proxyPass = "http://127.0.0.1:8080";
     };
 
+    # Mage-OS trial: a sconce repository served at this domain's root (sconce's
+    # custom domains; `sconce repo-domain` maps the hostname to the repo), with
+    # anonymous access, mirroring repo.mage-os.org so installs can be compared
+    # before the real domain moves. Read-only: sconce serves only the Composer
+    # read routes on a custom domain, so no upload headroom is needed. Proxy
+    # settings above pass the Host header through, which the mapping keys on.
+    virtualHosts."mageos.bougierepo.com" = {
+      enableACME = true;
+      forceSSL = true;
+      locations."/".proxyPass = "http://127.0.0.1:8080";
+    };
+
     # Apex bougie.cloud = the marketing landing (static, served from ./landing).
     virtualHosts."bougie.cloud" = {
       enableACME = true;
