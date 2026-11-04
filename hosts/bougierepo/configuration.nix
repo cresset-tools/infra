@@ -75,11 +75,6 @@ let
     # systemd never kills a copy that is still draining.
   };
 
-  # How long nginx leaves a copy alone after a failed connection. The rollout
-  # waits this out after each copy is healthy again: restarting the next copy
-  # sooner leaves nginx with both marked down, answering "no live upstreams".
-  failTimeout = 5;
-
   wirePorts = [ 8080 8090 ];
   uiPorts = [ 8081 8091 ];
 in
@@ -267,9 +262,8 @@ in
   systemd.services.podman-sconce-b = sconceUnit;
 
   # Roll a sconce release out without downtime: restart each copy in turn
-  # (pulling the new `latest`), waiting until it answers /healthz, and then
-  # until nginx sends it traffic again, before touching the next. Run on the
-  # host: `sconce-rollout`.
+  # (pulling the new `latest`), waiting until it answers /healthz before
+  # touching the next. Run on the host: `sconce-rollout`.
   environment.systemPackages = with pkgs; [
     curl
     jq
@@ -285,8 +279,7 @@ in
           systemctl restart "$unit"
           for _ in $(seq 1 120); do
             if curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz"; then
-              echo "$unit is healthy; waiting for nginx to use it again"
-              sleep ${toString (failTimeout + 1)}
+              echo "$unit is healthy"
               continue 2
             fi
             sleep 1
@@ -316,9 +309,9 @@ in
     # which retries even a POST when it was never sent) and leaves the failed
     # one alone for a few seconds.
     upstreams.sconce-wire.servers = lib.genAttrs (map (p: "127.0.0.1:${toString p}") wirePorts)
-      (_: { max_fails = 1; fail_timeout = "${toString failTimeout}s"; });
+      (_: { max_fails = 1; fail_timeout = "5s"; });
     upstreams.sconce-ui.servers = lib.genAttrs (map (p: "127.0.0.1:${toString p}") uiPorts)
-      (_: { max_fails = 1; fail_timeout = "${toString failTimeout}s"; });
+      (_: { max_fails = 1; fail_timeout = "5s"; });
 
     # The Composer repo server. Composer uploads/dist can be large; sconce
     # streams from the CAS, so give it generous body headroom.
