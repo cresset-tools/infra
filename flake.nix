@@ -212,6 +212,9 @@
           # environment for the same reason as in production: a pusher cannot set it.
           git --git-dir=canonical.git config cresset.approvalsFile "$TMPDIR/approved"
           git --git-dir=canonical.git config cresset.breakGlassFile "$TMPDIR/break-glass"
+          # One ungated subtree, as hosts/internal/git-canonical.nix configures the real
+          # repository. Checks 15-19 are about this one line.
+          git --git-dir=canonical.git config --add cresset.ungatedPath experiments
           bare="$TMPDIR/canonical.git"
           g() { git --git-dir="$bare" "$@"; }
 
@@ -544,6 +547,118 @@
           submit "for review" k.txt r gated
           jj git push -b review/gated >/dev/null 2>push.txt \
             || { echo "FAIL: pushing for review must not need approval"; cat push.txt; exit 1; }
+
+          # --- the ungated subtrees ---------------------------------------------------------
+          #
+          # `cresset.ungatedPath` lets a subtree land unreviewed. The risk is not that someone
+          # commits a typo to it unread — that is the feature — but that the exemption turns
+          # out wider than the prefix: a mixed commit riding in on it, a merge reading as
+          # touching nothing, a sibling matching by string prefix, or a prefix that exempts
+          # everything. Each of those is a check below.
+
+          # Check 13 advanced the remote with a local `update-ref`, which jj never saw. Without
+          # catching up, the first push of main from here fails with "stale info" and says
+          # nothing at all about the gate.
+          jj git fetch --remote canonical >/dev/null 2>&1
+          jj bookmark set main -r 'main@canonical' --allow-backwards >/dev/null
+
+          # 15. A commit confined to an ungated subtree lands with nothing approved, and says
+          #     so. Nothing here is approved — the file still holds whatever check 12c left.
+          mkdir -p experiments
+          submit "an experiment" experiments/notes.md scratch exp
+          jj bookmark set main -r 'review/exp' >/dev/null
+          jj git push -b main >/dev/null 2>push.txt \
+            || { echo "FAIL: an ungated commit was refused"; cat push.txt; exit 1; }
+          test "$(g rev-parse refs/heads/main)" = "$(jj log -r 'review/exp' --no-graph -T 'commit_id')" \
+            || { echo "FAIL: main did not advance to the ungated commit"; exit 1; }
+          grep -q "landing without review" push.txt \
+            || { echo "FAIL: landing unreviewed work must announce itself"; cat push.txt; exit 1; }
+
+          # 16. A commit touching an ungated path AND anything else is an ordinary commit.
+          #     The whole exemption in one check: what publishes is the commit, not the path,
+          #     so a mixed commit must not ride in on its ungated half.
+          jj new 'main@canonical' -m "an experiment and a product" >/dev/null
+          mkdir -p experiments products/bougie
+          echo more > experiments/notes.md
+          echo sneak > products/bougie/leaked.txt
+          jj bookmark set review/mixed -r @ >/dev/null
+          jj new >/dev/null
+          jj git push -b review/mixed >/dev/null 2>&1
+          jj bookmark set main -r 'review/mixed' >/dev/null
+          if jj git push -b main >/dev/null 2>push.txt; then
+            echo "FAIL: a commit mixing an ungated path with a product path landed unreviewed"
+            cat push.txt; exit 1
+          fi
+          grep -q "code.cresset.tools/?change=" push.txt \
+            || { echo "FAIL: the mixed commit must be refused as unapproved"; cat push.txt; exit 1; }
+          jj bookmark set main -r 'main@canonical' --allow-backwards >/dev/null
+
+          # 17. The prefix is a directory boundary, not a string prefix. `experimentsx/` is a
+          #     different subtree and still needs review.
+          mkdir -p experimentsx
+          submit "a lookalike subtree" experimentsx/notes.md scratch lookalike
+          jj bookmark set main -r 'review/lookalike' >/dev/null
+          if jj git push -b main >/dev/null 2>push.txt; then
+            echo "FAIL: experimentsx/ was exempted by the experiments prefix"; cat push.txt; exit 1
+          fi
+          jj bookmark set main -r 'main@canonical' --allow-backwards >/dev/null
+
+          # 18. A merge of two ungated commits is still refused. The hook refuses merges by
+          #     name before it ever asks whether the paths are ungated, and that order is what
+          #     stops a merge — which prints no diff, so no paths — from reading as exempt.
+          jj new 'main@canonical' -m "experiment left" >/dev/null
+          mkdir -p experiments
+          echo l > experiments/l.txt
+          expLeft=$(jj log -r @ --no-graph -T 'commit_id')
+          jj new 'main@canonical' -m "experiment right" >/dev/null
+          mkdir -p experiments
+          echo r > experiments/r.txt
+          expRight=$(jj log -r @ --no-graph -T 'commit_id')
+          jj new "$expLeft" "$expRight" -m "merge two experiments" >/dev/null
+          jj bookmark set review/expmerge -r @ >/dev/null
+          jj new >/dev/null
+          jj git push -b review/expmerge >/dev/null 2>&1
+          jj bookmark set main -r 'review/expmerge' >/dev/null
+          if jj git push -b main >/dev/null 2>push.txt; then
+            echo "FAIL: a merge of ungated commits landed"; cat push.txt; exit 1
+          fi
+          grep -q "merge commit" push.txt \
+            || { echo "FAIL: the refusal must name the merge"; cat push.txt; exit 1; }
+          jj bookmark set main -r 'main@canonical' --allow-backwards >/dev/null
+
+          # 19. A prefix that would exempt the whole repository STOPS the gate rather than
+          #     opening it, and says which value it refused.
+          #
+          #     The commit pushed here is one that the good prefix would exempt, so the only
+          #     thing that can refuse it is the configuration check itself — and the refusal
+          #     must come from there rather than from the gate further down. Checking only
+          #     that the push failed passes even if the hook merely complains and carries on,
+          #     which is how the first version of this check proved nothing.
+          g config --add cresset.ungatedPath /
+          mkdir -p experiments
+          submit "an experiment under a bad config" experiments/again.md scratch badcfg
+          jj bookmark set main -r 'review/badcfg' >/dev/null
+          if jj git push -b main >/dev/null 2>push.txt; then
+            echo "FAIL: an absolute ungatedPath did not stop the gate"; cat push.txt; exit 1
+          fi
+          grep -q "not a repository-relative" push.txt \
+            || { echo "FAIL: the refusal must name the bad configuration"; cat push.txt; exit 1; }
+          grep -q "not every commit has been approved" push.txt \
+            && { echo "FAIL: the hook complained about the config and then ran the gate anyway"; cat push.txt; exit 1; }
+          g config --unset-all cresset.ungatedPath
+          g config --add cresset.ungatedPath experiments
+          jj bookmark set main -r 'main@canonical' --allow-backwards >/dev/null
+
+          # 20. And the host really configures one. This check builds its own repository, so
+          #     without this the exemption could be dropped from the module that configures the
+          #     real one and every check above would still pass.
+          grep -q "cresset.ungatedPath" ${./hosts/internal/git-canonical.nix} \
+            || { echo "FAIL: git-canonical.nix no longer writes cresset.ungatedPath"; exit 1; }
+          #     And that the list it writes is not empty, which the grep above cannot tell:
+          #     the config line and its comments survive `ungatedPaths = [ ]` intact, so for
+          #     one revision this check passed while the host exempted nothing.
+          grep -qE 'ungatedPaths = \[ *"' ${./hosts/internal/git-canonical.nix} \
+            || { echo "FAIL: git-canonical.nix configures no ungated path at all"; exit 1; }
 
           echo "all canonical hook checks passed"
           touch $out
