@@ -33,18 +33,6 @@ let
   # and deliberately not under /srv/git, which cresset-view has no business writing to.
   approvalsFile = "/var/lib/cresset-review/approved";
 
-  # Subtrees that land on main without an approval. The exemption is per commit and
-  # all-or-nothing — see hooks/update — so a commit touching one of these *and* anything else
-  # is an ordinary commit needing review.
-  #
-  # `experiments/` is not entirely unmapped: `.sync/projects.toml` maps
-  # experiments/fused-interceptors (archived) and experiments/sync-testbed (bidirectional) to
-  # GitHub. Both of those repositories are private, so what this opens up is unreviewed work
-  # reaching two private repositories, never a public one. Adding a prefix that contains a
-  # public project's mapped path would be a publication hole, and nothing here can detect
-  # that for you.
-  ungatedPaths = [ "experiments" ];
-
   # Present means "let the next push to main through without approvals, then delete me".
   # Under /srv/git because the hook runs as `git` and must be able to remove it; creating it
   # needs host access, which is the point.
@@ -238,12 +226,6 @@ in
       git config --file ${bareRepo}/config cresset.breakGlassFile ${breakGlassFile}
       git config --file ${bareRepo}/config cresset.reviewUrl https://code.cresset.tools
 
-      # The subtrees that need no approval. Cleared first, so the list on the box is the list
-      # above rather than the union of every deploy that has ever run; `--unset-all` exits 5
-      # when the key is absent, which is the normal case on a first deploy.
-      git config --file ${bareRepo}/config --unset-all cresset.ungatedPath || true
-${lib.concatMapStringsSep "\n" (path: "      git config --file ${bareRepo}/config --add cresset.ungatedPath ${lib.escapeShellArg path}") ungatedPaths}
-
       # The sentinel hooks/post-receive touches to wake the viewer. Created here so it exists
       # before the first push: systemd's PathModified watches a path, and a file that has never
       # existed makes the first push the one that goes unnoticed.
@@ -252,9 +234,6 @@ ${lib.concatMapStringsSep "\n" (path: "      git config --file ${bareRepo}/confi
       # here for the same reason: systemd watches a path, and a file that has never existed
       # makes the first push after a deploy the one nothing hears.
       install -o git -g git -m 0644 /dev/null ${gitHome}/.submit-requested
-      # And the one that asks for the downstream branches of changes that are no longer under
-      # review to be closed out. Same reason again.
-      install -o git -g git -m 0644 /dev/null ${gitHome}/.cleanup-requested
 
       # Belt-and-braces: keep the whole tree git-owned across redeploys (a push
       # or the local worker advance may have created objects as `git`).
