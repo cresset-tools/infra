@@ -107,9 +107,13 @@ let
     git push origin mageos-testing --force-with-lease -q \
         || echo "warning: could not push mageos-testing to fork"
 
-    # (php 8.4 pin is committed in the branch's composer.json —
-    # config.platform.php — so no `bougie php pin` here: it rewrites
-    # composer.json formatting and dirties the tree.)
+    # The branch keeps composer.json/composer.lock identical to upstream —
+    # any edit of ours conflicts on composer.lock's content-hash whenever
+    # upstream changes dependencies. PHP version and services come from
+    # the branch's bougie.toml; imagick (image tests) can only be enabled
+    # through composer.json, so add it here, after the rebase and push,
+    # and leave it uncommitted. The next run's reset --hard discards it.
+    bougie ext add imagick
     bougie sync
     # Services may be down after an unattended reboot.
     bougie service up
