@@ -51,14 +51,12 @@ let
   # (register the modulargento 3.2.0 distribution in the version overlay),
   # bd9f154 (Loki Checkout now installs from Packagist; Nebula from
   # qoliber's keyed registry as nebula/admin) and 2b6e653 (modulargento is
-  # offered on Mage-OS 3.5.0 and 4.0.0; 3.0.0, no longer served, is dropped)
-  # and 7a4aefc (the modules Mage-OS 4.0.0 bundles become removable sets;
-  # a set may now require several sets and layers).
+  # offered on Mage-OS 3.5.0 and 4.0.0; 3.0.0, no longer served, is dropped).
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "5cbc090913b313fef954dc9b48339553c301bc52";
-    hash = "sha256-88wmXAcMgQu7CMh/d4C6uf3LaKJw1PcG0slO+aiqysY=";
+    rev = "2b6e653a1112e02f586059249f3f4b98deed8c4b";
+    hash = "sha256-PkWut0oRJO5MUkaUPA8Ep3Oa8/CBnEMr12R8nwFIBUY=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed

@@ -22,10 +22,10 @@ let
   # (same pattern as hosts/demo).
   bougie = pkgs.stdenv.mkDerivation rec {
     pname = "bougie";
-    version = "0.56.0";
+    version = "0.48.0";
     src = pkgs.fetchurl {
       url = "https://github.com/cresset-tools/bougie/releases/download/bougie-v${version}/bougie-x86_64-unknown-linux-musl.tar.gz";
-      hash = "sha256:0mz65scvjpi57shgg7gfxbppd3n45rr2jwaisrp3y959ba1zki69";
+      hash = "sha256:0p02vx0nxpfm2cjkixmfjhq1hfp6lsz9b2i9j97nv9d90wvk43qz";
     };
     sourceRoot = ".";
     dontBuild = true;
@@ -129,21 +129,16 @@ let
     fi
 
     cd "$DIR/dev/tests/integration"
-    # Sandboxes keep the MariaDB socket path in env.php, and bougie
-    # upgrades can move the socket (0.56 did), so re-template when it moved.
-    SOCK=$(bougie run -- sh -c 'echo $BOUGIE_SERVICE_MARIADB_SOCKET')
-    TEMPLATE_ENV=$(ls tmp/sandbox-0-*/etc/env.php 2>/dev/null | head -1)
-    if [ -n "$TEMPLATE_ENV" ] && ! grep -qF "'$SOCK'" "$TEMPLATE_ENV"; then
-        NEED_TEMPLATE=1
-    fi
     if [ "$NEED_TEMPLATE" = 1 ]; then
-        echo "--- re-templating (schema/deps changed, socket moved, or first run) ---"
+        echo "--- re-templating (schema/deps changed or first run) ---"
         rm -rf tmp/sandbox-* "$DIR/generated/code" "$DIR/generated/metadata"
+        SOCK=$HOME/.local/share/bougie/state/services/mariadb/run/mariadb.sock
+        CLIENT=$(ls "$HOME"/.local/share/bougie/store/mariadb-*/bin/mariadb | tail -1)
         TENANT=$(cd "$DIR" && bougie run -- sh -c 'echo $BOUGIE_SERVICE_MARIADB_DATABASE')
         {
             echo "DROP DATABASE IF EXISTS \`$TENANT\`; CREATE DATABASE \`$TENANT\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON \`$TENANT\`.* TO '$TENANT'@'localhost';"
             for t in $(seq 1 "$WORKERS"); do echo "DROP DATABASE IF EXISTS \`''${TENANT}_t$t\`;"; done
-        } | bougie service exec mariadb -- --user="$(id -un)" # OS user: admin via unix_socket
+        } | "$CLIENT" --socket="$SOCK"
         bougie run -- timeout 2700 php ../../../vendor/bin/phpunit -c phpunit-parallel.xml \
             testsuite/Magento/Directory/Model/CurrencyConfigTest.php >/dev/null 2>&1 || true
         TEMPLATE=$(ls -d tmp/sandbox-0-* | head -1)

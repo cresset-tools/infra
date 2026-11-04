@@ -19,8 +19,8 @@ version = "1"
 features = ["rt-multi-thread", "macros", "signal", "time"]
 
 [dependencies.rusqlite]
-version = "0.42"
-features = ["bundled", "backup", "fallible_uint"]
+version = "0.37"
+features = ["bundled", "backup"]
 
 [profile.release]
 lto = true
