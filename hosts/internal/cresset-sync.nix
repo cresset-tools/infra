@@ -485,12 +485,11 @@ in
       User = "cresset-sync";
       Group = "cresset-sync";
       EnvironmentFile = config.sops.templates."cresset-sync.env".path;
-      # Its own directory, owned by this user. Writing it beside the approvals file did not
-      # work: that directory is group `git` mode 2750, so this service could read it and not
-      # create anything in it, and the unit failed every two minutes for five days. See the
-      # tmpfiles rule in configuration.nix for why widening that directory is the wrong fix.
-      ReadWritePaths = [ "/var/lib/cresset-sync" ];
-      ExecStart = "${cresset-sync}/bin/cresset-sync --repo-root /srv/sync/jj-workspace --db /srv/sync/state.db checks --out /var/lib/cresset-sync/checks.json";
+      # The snapshot lives beside the approvals file, in the directory cresset-view already
+      # reads. cresset-sync writes it; the setgid bit on that directory is what makes it
+      # readable by the other side.
+      ReadWritePaths = [ "/var/lib/cresset-review" ];
+      ExecStart = "${cresset-sync}/bin/cresset-sync --repo-root /srv/sync/jj-workspace --db /srv/sync/state.db checks --out /var/lib/cresset-review/checks.json";
     };
   };
 
