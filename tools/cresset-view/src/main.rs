@@ -976,6 +976,22 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
         // cannot say which stack a mid-stack commit belongs to, because the commit itself
         // carries no bookmark — the answer is which tip it is an ancestor of.
         let landed = RevsetExpression::commits(landed).ancestors();
+
+        // Evaluated once, because every stack is tested against it. `::tip - ::main` below
+        // subtracts by COMMIT id, and that is not enough on its own: a change rebased onto a
+        // newer main before landing lands as a different commit, so the commit the review
+        // bookmark still points at is never an ancestor of main. The stack therefore never
+        // empties, the "landed, not yet deleted" skip never fires, and the change sits in the
+        // open queue for good. Eight of the 67 review bookmarks were in that state.
+        //
+        // So the subtraction is done twice over: by commit id in the revset, and by change id
+        // per commit, since the change id is the thing a rebase preserves and the thing review
+        // is anchored to everywhere else.
+        //
+        // The clone is an `Arc::clone` — `evaluate` consumes the expression and the per-stack
+        // subtraction below still needs it.
+        let landed_set = landed.clone().evaluate(repo)?;
+        let landed_contains = landed_set.containing_fn();
         let mut stacks = Vec::new();
         for (bookmark, tip) in tips {
             let open = RevsetExpression::commits(vec![tip.clone()])
@@ -990,6 +1006,20 @@ async fn changes(State(state): State<AppState>) -> Result<Json<ChangesResponse>,
 
             let mut changes = Vec::new();
             for commit in commits {
+                // Checked before any other work on this commit: if the change has landed there
+                // is nothing to report about it, whatever commit id carried it there.
+                if let Some(resolved) = repo.resolve_change_id(commit.change_id())? {
+                    let mut landed_elsewhere = false;
+                    for (id, _) in &resolved.targets {
+                        if landed_contains(id)? {
+                            landed_elsewhere = true;
+                            break;
+                        }
+                    }
+                    if landed_elsewhere {
+                        continue;
+                    }
+                }
                 let change_id = commit.change_id().reverse_hex();
                 let patch_sets = read_patch_sets(repo, &change_id)?.len();
                 // Two short-lived git processes per change. Cheap next to the repository load
