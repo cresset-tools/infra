@@ -35,12 +35,12 @@
     "cresset-sync": {
       "flake": false,
       "locked": {
-        "lastModified": 1794038157,
-        "narHash": "sha256-WMNP9QGeuxW4otB84LywmQL+qjsLnoKe8Toda01hQSo=",
-        "rev": "5d5ad9faff36f02ba538207820f9c1cbdb0bb7a5",
-        "revCount": 55,
+        "lastModified": 1794039165,
+        "narHash": "sha256-gu8tJhnWQqcRRBjFiYGzK51s/6N/gs5XmHzkgkii3Us=",
+        "rev": "652b3127fecf146541e237ced705e942ddf338fa",
+        "revCount": 56,
         "type": "tarball",
-        "url": "https://api.flakehub.com/f/pinned/cresset-tools/cresset-sync/0.1.55%2Brev-5d5ad9faff36f02ba538207820f9c1cbdb0bb7a5/01a1b502-3e95-70a2-b8ba-6cb620fc1869/source.tar.gz"
+        "url": "https://api.flakehub.com/f/pinned/cresset-tools/cresset-sync/0.1.56%2Brev-652b3127fecf146541e237ced705e942ddf338fa/01a1b627-9081-7ff0-b632-f74f669b7272/source.tar.gz"
       },
       "original": {
         "type": "tarball",
