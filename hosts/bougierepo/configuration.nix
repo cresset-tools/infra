@@ -20,7 +20,7 @@
 # it silently rotted (the console served branding that had been removed two weeks
 # earlier). Releasing sconce is now the whole deploy: release-please cuts the tag,
 # build-docker.yml publishes it, and this host picks it up on the next restart of
-# `sconce-rollout`, one copy at a time. Rollback = point `image` at an explicit version tag.
+# `ssh deploy@bougierepo.com` (sconce-rollout.service), one copy at a time. Rollback = point `image` at an explicit version tag.
 #
 # Secrets come from sops-nix (../../secrets/bougierepo.yaml, decrypted at
 # activation with this box's SSH host key). Nothing secret lands in the Nix
@@ -79,6 +79,44 @@ let
   # waits this out after each copy is healthy again: restarting the next copy
   # sooner leaves nginx with both marked down, answering "no live upstreams".
   failTimeout = 5;
+
+  rolloutLog = "/var/log/sconce-rollout.log";
+
+  sconceRollout = pkgs.writeShellApplication {
+    name = "sconce-rollout";
+    runtimeInputs = [ pkgs.curl pkgs.systemd ];
+    text = ''
+      for copy in sconce:8080 sconce-b:8090; do
+        unit="podman-''${copy%%:*}"
+        port="''${copy##*:}"
+        echo "restarting $unit"
+        systemctl restart "$unit"
+        for _ in $(seq 1 120); do
+          if curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz"; then
+            echo "$unit is healthy; waiting for nginx to use it again"
+            sleep ${toString (failTimeout + 1)}
+            continue 2
+          fi
+          sleep 1
+        done
+        echo "$unit did not become healthy; stopping the rollout" >&2
+        exit 1
+      done
+    '';
+  };
+
+  # The deploy user's forced command: run the rollout and show how it went.
+  sconceDeploy = pkgs.writeShellApplication {
+    name = "sconce-deploy";
+    runtimeInputs = [ pkgs.systemd pkgs.coreutils ];
+    text = ''
+      rc=0
+      systemctl start sconce-rollout.service || rc=$?
+      cat ${rolloutLog} 2>/dev/null || true
+      if [ "$rc" -ne 0 ]; then echo "rollout failed (systemctl exit $rc)" >&2; fi
+      exit "$rc"
+    '';
+  };
 
   wirePorts = [ 8080 8090 ];
   uiPorts = [ 8081 8091 ];
@@ -268,34 +306,53 @@ in
 
   # Roll a sconce release out without downtime: restart each copy in turn
   # (pulling the new `latest`), waiting until it answers /healthz, and then
-  # until nginx sends it traffic again, before touching the next. Run on the
-  # host: `sconce-rollout`.
+  # until nginx sends it traffic again, before touching the next. A oneshot
+  # unit, so it runs as root without its caller being root: the `deploy` user
+  # below may start it and nothing else. Never started by boot or activation.
+  systemd.services.sconce-rollout = {
+    description = "Roll the latest sconce release out, one copy at a time";
+    restartIfChanged = false;
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "${sconceRollout}/bin/sconce-rollout";
+      # The caller reads the outcome here; `deploy` cannot read the journal.
+      StandardOutput = "truncate:${rolloutLog}";
+      StandardError = "inherit";
+    };
+  };
+
+  # The account a release is deployed with: `ssh deploy@bougierepo.com` starts
+  # sconce-rollout.service and prints its log, whatever command is asked for.
+  # Its keys can do nothing else (`restrict`: no shell, pty or forwarding),
+  # and polkit lets it start that one unit (`systemctl start` only, not stop,
+  # restart or any other unit).
+  users.groups.deploy = { };
+  users.users.deploy = {
+    isNormalUser = true;
+    group = "deploy";
+    description = "sconce release deploys";
+    openssh.authorizedKeys.keys = map (k: ''restrict,command="${sconceDeploy}/bin/sconce-deploy" ${k}'') [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMAlEwhbBOJor7VO1Bkv7jLM4aTzElFGSdduEMIz73d7 jelle@dev-debn-02"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICunYiTe1MOJsGC5OBn69bewMBS5bCCE1WayvM4DZLwE jelle@Jelles-MacBook-Pro.local"
+    ];
+  };
+  security.polkit.enable = true;
+  security.polkit.extraConfig = ''
+    polkit.addRule(function (action, subject) {
+      if (action.id == "org.freedesktop.systemd1.manage-units" &&
+          action.lookup("unit") == "sconce-rollout.service" &&
+          action.lookup("verb") == "start" &&
+          subject.user == "deploy") {
+        return polkit.Result.YES;
+      }
+    });
+  '';
+
   environment.systemPackages = with pkgs; [
     curl
     jq
     htop
-    (writeShellApplication {
-      name = "sconce-rollout";
-      runtimeInputs = [ curl systemd ];
-      text = ''
-        for copy in sconce:8080 sconce-b:8090; do
-          unit="podman-''${copy%%:*}"
-          port="''${copy##*:}"
-          echo "restarting $unit"
-          systemctl restart "$unit"
-          for _ in $(seq 1 120); do
-            if curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz"; then
-              echo "$unit is healthy; waiting for nginx to use it again"
-              sleep ${toString (failTimeout + 1)}
-              continue 2
-            fi
-            sleep 1
-          done
-          echo "$unit did not become healthy; stopping the rollout" >&2
-          exit 1
-        done
-      '';
-    })
+    sconceRollout
   ];
 
   # ---- nginx: TLS termination + reverse proxy ----
