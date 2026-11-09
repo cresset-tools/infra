@@ -215,6 +215,13 @@ in
     fi
   '';
 
+  # bougie's PHP builds look for CA certificates at /etc/ssl/cert.pem
+  # (openssl_get_cert_locations()), which NixOS doesn't provide, so every
+  # HTTPS request from PHP fails certificate verification
+  # (AsyncClientInterfaceTest). Point it at the system bundle.
+  environment.etc."ssl/cert.pem".source =
+    config.environment.etc."ssl/certs/ca-certificates.crt".source;
+
   programs.ssh.knownHosts.github = {
     hostNames = [ "github.com" ];
     publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
