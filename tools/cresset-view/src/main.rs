@@ -1398,9 +1398,37 @@ async fn merge(
     tracing::info!(who = %identity.0, %bookmark, %tip, "landing a stack");
 
     // Blocking: git is a subprocess and this is a button press, not a hot path.
-    let output = tokio::task::spawn_blocking(move || push_to_main(&repository, &config, &tip))
+    let mut output = {
+        let (repository, config, tip) = (repository.clone(), config.clone(), tip.clone());
+        tokio::task::spawn_blocking(move || push_to_main(&repository, &config, &tip))
+            .await
+            .context("running git push")??
+    };
+
+    // The change is on main. Everything from here is tidying, and its failures are REPORTED
+    // rather than raised: an error response after a successful push would tell the reviewer the
+    // opposite of what happened, and they would reasonably press the button again.
+    let tidied = match review_bookmark(&bookmark) {
+        // Nothing this service is willing to interpolate into a refspec. Landing a tip is
+        // meaningful without a bookmark, so this is a note, not a refusal.
+        None => Ok(format!(
+            "Left {bookmark} alone: it is not a review/* bookmark, so this service will not \
+             push a refspec naming it."
+        )),
+        Some(bookmark) => tokio::task::spawn_blocking(move || {
+            delete_landed_review_bookmark(&repository, &config, &bookmark, &tip)
+        })
         .await
-        .context("running git push")??;
+        .context("running git push to delete the review bookmark")?,
+    };
+    output.push_str("\n\n");
+    match tidied {
+        Ok(note) => output.push_str(&note),
+        Err(error) => output.push_str(&format!(
+            "The change landed. Its review bookmark is still there, which will keep the \
+             downstream pull request open until it is deleted: {error}"
+        )),
+    }
 
     Ok(Json(MergeResponse {
         bookmark: body.bookmark,
@@ -1448,17 +1476,9 @@ async fn rebase(
             anyhow!("rebasing is not available on this instance: no remote is configured").into(),
         );
     };
-    // The bookmark is interpolated into a revset and a refspec, so it is constrained rather than
-    // escaped: only what this system actually creates.
-    let bookmark = body.bookmark.trim().to_owned();
-    if !bookmark.starts_with("review/")
-        || !bookmark[7..]
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/')
-        || bookmark.len() > 200
-    {
+    let Some(bookmark) = review_bookmark(&body.bookmark) else {
         return Err(anyhow!("only a review/* bookmark can be rebased").into());
-    }
+    };
 
     tracing::info!(who = %identity.0, %bookmark, "rebasing onto main");
     let outcome = tokio::task::spawn_blocking(move || rebase_onto_main(&config, &bookmark))
@@ -1605,6 +1625,87 @@ fn ssh_command(config: &MergeConfig) -> String {
         "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={} -o BatchMode=yes",
         config.ssh_key.display(),
         config.known_hosts.display(),
+    )
+}
+
+/// The one spelling of a review bookmark this service will put in a revset or a refspec.
+///
+/// Constrained rather than escaped, and in one place rather than per caller: only what this
+/// system actually creates. A bookmark arrives from the browser, so anything else is either a
+/// mistake or an attempt to make `jj` or `git push` read an argument as something else.
+fn review_bookmark(value: &str) -> Option<String> {
+    let bookmark = value.trim();
+    let name = bookmark.strip_prefix("review/")?;
+    let shaped = !name.is_empty()
+        && bookmark.len() <= 200
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/');
+    shaped.then(|| bookmark.to_owned())
+}
+
+/// Delete a review bookmark on the canonical repository, now that its tip has landed.
+///
+/// **Leased to the commit that landed**, so the deletion happens only if the ref still points at
+/// exactly that commit. A patch set pushed between the land and this call therefore survives:
+/// the button decided about a version somebody read, and must not throw away one nobody saw.
+/// git reports both "it moved" and "it is already gone" as `stale info`, and both mean the same
+/// thing here — leave it.
+///
+/// Why land-time is the right moment, rather than something a sweep could do later. A bookmark
+/// left on a landed change is not inert: `cresset-sync submit` keeps pushing every
+/// `(project, change)` pair its open review bookmarks name, so the downstream review branch
+/// stays alive and its pull request stays open indefinitely. `cresset-sync cleanup` will not
+/// close it either, and is right not to — it keeps any branch whose change `submit` would still
+/// push, because from the outside a bookmark somebody still wants and one nobody deleted look
+/// identical. Only whatever did the landing knows the difference, and this is it.
+///
+/// Nothing is lost. `hooks/post-receive` pins every patch set as `refs/changes/<change id>/<n>`
+/// permanently and independently of any bookmark, which is where the viewer reads patch sets
+/// from in the first place.
+fn delete_landed_review_bookmark(
+    repository: &Path,
+    config: &MergeConfig,
+    bookmark: &str,
+    tip: &str,
+) -> Result<String> {
+    let reference = format!("refs/heads/{bookmark}");
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .arg("push")
+        .arg(format!("--force-with-lease={reference}:{tip}"))
+        .arg(&config.remote)
+        .arg(format!(":{reference}"))
+        .env("GIT_SSH_COMMAND", ssh_command(config))
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .context("running git push")?;
+
+    let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    let text = text.trim().to_owned();
+    if output.status.success() {
+        return Ok(format!(
+            "Deleted {bookmark}. Its patch sets stay pinned as refs/changes/*, and the \
+             downstream review branch is closed out on the synchronizer's next cleanup pass."
+        ));
+    }
+
+    if text.contains("stale info") {
+        return Ok(format!(
+            "Left {bookmark} alone: it is no longer at the commit that just landed, so it has \
+             either moved on to work this land did not include or been deleted already."
+        ));
+    }
+
+    bail!(
+        "{}",
+        if text.is_empty() {
+            "git push failed".to_owned()
+        } else {
+            text
+        }
     )
 }
 

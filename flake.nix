@@ -64,15 +64,9 @@
       url = "github:serokell/deploy-rs";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # Declarative VMs: hosts/mageos-testing runs the demo's GitHub Actions
-    # runner in one (hosts/mageos-testing/demo-runner.nix).
-    microvm = {
-      url = "github:microvm-nix/microvm.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, sops-nix, bougie-relay, cresset-sync, deploy-rs, ... }:
+  outputs = inputs@{ self, nixpkgs, determinate, disko, nixos-anywhere, sops-nix, bougie-relay, cresset-sync, deploy-rs }:
     let
       # CAX11 is aarch64. The deploy/switch helper apps run on the
       # operator's laptop too, so we expose them on both common arches.
