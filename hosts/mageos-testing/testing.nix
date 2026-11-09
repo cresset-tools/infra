@@ -22,10 +22,10 @@ let
   # (same pattern as hosts/demo).
   bougie = pkgs.stdenv.mkDerivation rec {
     pname = "bougie";
-    version = "0.48.0";
+    version = "0.56.0";
     src = pkgs.fetchurl {
       url = "https://github.com/cresset-tools/bougie/releases/download/bougie-v${version}/bougie-x86_64-unknown-linux-musl.tar.gz";
-      hash = "sha256:0p02vx0nxpfm2cjkixmfjhq1hfp6lsz9b2i9j97nv9d90wvk43qz";
+      hash = "sha256:0mz65scvjpi57shgg7gfxbppd3n45rr2jwaisrp3y959ba1zki69";
     };
     sourceRoot = ".";
     dontBuild = true;
