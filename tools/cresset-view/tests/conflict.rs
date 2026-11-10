@@ -1040,6 +1040,25 @@ fn merging_is_a_push_and_the_hook_still_decides() {
     };
     let before = head_of_main();
 
+    // The review bookmark as the canonical repository holds it. `rev-parse --verify` exits
+    // non-zero once it is gone, which is the state being asserted either way.
+    let review_bookmark = || {
+        let out = Command::new("git")
+            .arg("--git-dir")
+            .arg(&bare)
+            .args(["rev-parse", "--verify", "refs/heads/review/thing"])
+            .output()
+            .expect("rev-parse");
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    assert_eq!(
+        review_bookmark().as_deref(),
+        Some(commit.as_str()),
+        "the fixture must start with the bookmark on the commit under review"
+    );
+
     let body = format!(r#"{{"bookmark":"review/thing","tip":"{commit}"}}"#);
     let (status, refused) = server.post("/api/merge", &body, &[]);
     assert_eq!(
@@ -1051,6 +1070,11 @@ fn merging_is_a_push_and_the_hook_still_decides() {
         "the hook's own message must reach the reviewer, since it is the actionable part: {refused}"
     );
     assert_eq!(head_of_main(), before, "a refused merge must not move main");
+    assert_eq!(
+        review_bookmark().as_deref(),
+        Some(commit.as_str()),
+        "and must not delete the bookmark: the change is still open"
+    );
 
     // The same merge, once the hook is satisfied.
     std::fs::write(&allow, "").expect("allow");
@@ -1060,6 +1084,20 @@ fn merging_is_a_push_and_the_hook_still_decides() {
         head_of_main(),
         commit,
         "main must be at the tip that was merged"
+    );
+
+    // Landing deletes the review bookmark, because leaving it is not inert: `cresset-sync
+    // submit` keeps pushing the pair an open review bookmark names, so the downstream pull
+    // request stays open indefinitely, and `cresset-sync cleanup` deliberately will not close
+    // a branch whose change submit would still push.
+    assert_eq!(
+        review_bookmark(),
+        None,
+        "landing must delete the review bookmark it made stale"
+    );
+    assert!(
+        merged.contains("Deleted review/thing"),
+        "and must say so, since the reviewer is the one who would otherwise go looking: {merged}"
     );
 
     // A short id would push something other than what was on screen.
@@ -1076,6 +1114,77 @@ fn merging_is_a_push_and_the_hook_still_decides() {
     let (status, refused) = server.post("/api/merge", &body, &[("sec-fetch-site", "cross-site")]);
     assert_eq!(status, 400, "a cross-site merge must be refused: {refused}");
     assert!(refused.contains("same-origin"), "and say why: {refused}");
+}
+
+/// A patch set pushed after the one being landed is not thrown away with the bookmark.
+///
+/// The race is ordinary, not exotic: the author pushes a revision while the reviewer is looking
+/// at the previous one, and presses Merge. The land is still correct — it names a commit id, and
+/// that commit is what goes to main — but the bookmark now carries work this land did not
+/// include, and deleting it would discard the only ref pointing at it.
+///
+/// Expressed as a lease on the push rather than a check before it, because a check would be a
+/// second round trip that the deletion can still lose the race to.
+#[test]
+fn a_bookmark_that_moved_after_the_landed_version_is_left_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_change, first) = review_repo(dir.path());
+    let bare = dir.path().join("canonical.git");
+    let work = dir.path().join("work");
+
+    // Patch set 2: the same change, revised. jj carries the change id across the rewrite, so
+    // this is one change with two commit ids -- which is the situation, not a simplification
+    // of it. No update hook is installed here; what gates the push is not under test.
+    std::fs::write(work.join("g.txt"), "two\n").expect("write");
+    jj(&work, &["bookmark", "set", "review/thing", "-r", "@"]);
+    jj(&work, &["git", "push", "-b", "review/thing"]);
+    let second = jj(&work, &["log", "-r", "@", "--no-graph", "-T", "commit_id"]);
+    assert_ne!(first, second, "the revision must be a new commit");
+
+    let viewer = dir.path().join("viewer");
+    let review_db = dir.path().join("review.db");
+    let server = Server::start_with(
+        &viewer,
+        &[
+            "--review-db",
+            review_db.to_str().unwrap(),
+            "--merge-remote",
+            bare.to_str().unwrap(),
+            "--merge-ssh-key",
+            "/dev/null",
+        ],
+    );
+
+    let reference = |name: &str| {
+        let out = Command::new("git")
+            .arg("--git-dir")
+            .arg(&bare)
+            .args(["rev-parse", "--verify", name])
+            .output()
+            .expect("rev-parse");
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+
+    // Land the FIRST patch set: the version that was read, named by its full commit id.
+    let body = format!(r#"{{"bookmark":"review/thing","tip":"{first}"}}"#);
+    let (status, landed) = server.post("/api/merge", &body, &[]);
+    assert_eq!(status, 200, "the land itself must succeed: {landed}");
+    assert_eq!(
+        reference("refs/heads/main").as_deref(),
+        Some(first.as_str()),
+        "main must be at the version that was landed"
+    );
+    assert_eq!(
+        reference("refs/heads/review/thing").as_deref(),
+        Some(second.as_str()),
+        "the bookmark carries work this land did not include, so it must survive"
+    );
+    assert!(
+        landed.contains("Left review/thing alone"),
+        "and the reviewer must be told it was left, not silently kept: {landed}"
+    );
 }
 
 /// A change whose base has moved is told to rebase, not to `git pull`.
