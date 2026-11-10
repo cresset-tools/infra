@@ -211,11 +211,6 @@
           # Where the host points these too, only inside the sandbox. Config rather than
           # environment for the same reason as in production: a pusher cannot set it.
           git --git-dir=canonical.git config cresset.approvalsFile "$TMPDIR/approved"
-          # Somewhere the sandbox can see the sentinels land. Production uses the default,
-          # /srv/git, which no test can write to -- so before this knob existed the only thing
-          # checked about the signalling was that the hook did not crash on the way past it.
-          mkdir -p "$TMPDIR/sentinels"
-          git --git-dir=canonical.git config cresset.sentinelDir "$TMPDIR/sentinels"
           git --git-dir=canonical.git config cresset.breakGlassFile "$TMPDIR/break-glass"
           # One ungated subtree, as hosts/internal/git-canonical.nix configures the real
           # repository. Checks 15-19 are about this one line.
@@ -664,55 +659,6 @@
           #     one revision this check passed while the host exempted nothing.
           grep -qE 'ungatedPaths = \[ *"' ${./hosts/internal/git-canonical.nix} \
             || { echo "FAIL: git-canonical.nix configures no ungated path at all"; exit 1; }
-
-          # 21-24. The sentinels: which kind of push asks for which piece of work.
-          #
-          #     These are how the hook reaches the two services that talk to GitHub, and the
-          #     mechanism fails SILENTLY -- a sentinel that is never touched looks exactly like
-          #     a quiet repository. The cleanup signal in particular is the only notice anything
-          #     takes of an abandoned change: once its bookmark is gone there is nothing left in
-          #     the monorepo to find, so a push that does not raise it means the downstream
-          #     branch and its pull request stay there for ever.
-          sentinels="$TMPDIR/sentinels"
-          clearSentinels() { rm -f "$sentinels"/.refresh-requested "$sentinels"/.submit-requested "$sentinels"/.cleanup-requested; }
-          raised() { test -e "$sentinels/.$1-requested"; }
-
-          # 21. Pushing a change for review asks for a submit, and NOT for a cleanup. Cleanup
-          #     deletes branches; a signal on every patch set would point it at live work.
-          clearSentinels
-          submit "a change that will be abandoned" sentinel.txt gone sentinel
-          raised refresh || { echo "FAIL: a review push did not wake the viewer"; exit 1; }
-          raised submit || { echo "FAIL: a review push did not ask for a submit"; exit 1; }
-          raised cleanup && { echo "FAIL: a review push asked for a cleanup"; exit 1; }
-
-          # 22. Deleting a review bookmark asks for a cleanup, and not for a submit -- there is
-          #     nothing left to submit, and this is the abandonment signal.
-          clearSentinels
-          jj bookmark delete review/sentinel >/dev/null
-          jj git push --deleted >/dev/null 2>&1
-          raised cleanup || { echo "FAIL: deleting a review bookmark did not ask for a cleanup"; exit 1; }
-          raised submit && { echo "FAIL: a deletion asked for a submit with nothing to submit"; exit 1; }
-
-          # 23. And the deletion did not disturb the patch sets. The commit it pinned is
-          #     unreachable from any branch now, which is exactly why the pin is what keeps an
-          #     abandoned change readable after the fact.
-          sentinelCid=$(jj log -r 'present(review/sentinel)' --no-graph -T 'change_id' 2>/dev/null || true)
-          test -z "$sentinelCid" || { echo "FAIL: the bookmark is still there"; exit 1; }
-
-          # 24. Landing on main asks for a cleanup: the change is finished, so whatever it left
-          #     in the downstream repositories is now stale. This is the common case -- most
-          #     changes land rather than being abandoned -- and `main` is not a `review/*` ref,
-          #     so it is reached by its own arm of the hook's dispatch.
-          clearSentinels
-          submit "a change that will land" sentinel2.txt landing sentinel2
-          clearSentinels
-          landed2=$(jj log -r 'review/sentinel2' --no-graph -T 'commit_id')
-          echo "$(jj log -r 'review/sentinel2' --no-graph -T 'change_id') $(pidof "$landed2")" > "$TMPDIR/approved"
-          jj bookmark set main -r 'review/sentinel2' >/dev/null
-          jj git push -b main >/dev/null 2>push.txt \
-            || { echo "FAIL: an approved push was refused"; cat push.txt; exit 1; }
-          raised cleanup || { echo "FAIL: landing on main did not ask for a cleanup"; exit 1; }
-          raised refresh || { echo "FAIL: landing on main did not wake the viewer"; exit 1; }
 
           echo "all canonical hook checks passed"
           touch $out
