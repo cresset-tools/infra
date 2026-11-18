@@ -304,22 +304,6 @@ in
     '';
   };
 
-  # Composer auth for the gated repo.bougie.tools, materialized read-only into
-  # the Deployer `shared/` tree (below) so every release's auth.json resolves to
-  # it. The read token is the http-basic password (sconce ignores the username).
-  sops.templates."magento-auth-json" = {
-    content = ''
-      {
-          "http-basic": {
-              "repo.bougie.tools": {
-                  "username": "token",
-                  "password": "${config.sops.placeholder."sconce/read_token"}"
-              }
-          }
-      }
-    '';
-  };
-
   # ---- Datastores (classic host services, loopback-only) ----
   services.postgresql = {
     enable = true;
@@ -397,12 +381,13 @@ in
     '';
   };
 
-  # Materialize the read-only sops files (env.php + auth.json) into the Deployer
-  # `shared/` tree, so every release symlinks to them. Owned root:magento 0440 —
-  # magento (build + serve) can READ but nothing can WRITE, keeping env.php
-  # read-only. Re-asserts the sops-declared content on every rebuild.
+  # Materialize the read-only sops env.php into the deploy's `shared/` tree, the
+  # template each release's env.php is derived from. Owned root:magento 0440 —
+  # magento can READ but nothing can WRITE it. Re-asserts the sops-declared
+  # content on every rebuild. There is no auth.json: composer runs only in CI,
+  # which has its own credentials.
   systemd.services.demo-magento-shared-seed = {
-    description = "Seed Magento shared/ from sops (env.php, auth.json)";
+    description = "Seed Magento shared/ from sops (env.php)";
     wantedBy = [ "multi-user.target" ];
     before = [ "podman-magento.service" ];
     # The rendered sops paths are stable, so a content-only change (e.g. flipping
@@ -410,7 +395,6 @@ in
     # stale file. Re-run whenever the rendered content changes.
     restartTriggers = [
       config.sops.templates."magento-env-php".content
-      config.sops.templates."magento-auth-json".content
     ];
     serviceConfig = {
       Type = "oneshot";
@@ -420,9 +404,8 @@ in
       install -D -o root -g magento -m 0440 \
         ${config.sops.templates."magento-env-php".path} \
         /var/lib/magento/shared/app/etc/env.php
-      install -D -o root -g magento -m 0440 \
-        ${config.sops.templates."magento-auth-json".path} \
-        /var/lib/magento/shared/auth.json
+      # Left behind by earlier versions of this unit.
+      rm -f /var/lib/magento/shared/auth.json
     '';
   };
 
@@ -577,11 +560,11 @@ in
       autoStart = true;
       user = "990:990";
       extraOptions = [ "--network=host" ];
-      # Mount the whole Deployer tree at the identical path so atomic symlink
+      # Mount the whole deploy tree at the identical path so atomic symlink
       # swaps (current -> releases/N) are honored live and absolute symlinks
-      # (env.php, auth.json, shared dirs) resolve the same inside the container.
-      # env.php is the release's read-only symlink into shared/, so no separate
-      # bind-mount is needed.
+      # (shared dirs) resolve the same inside the container. Each release has
+      # its own env.php, derived from shared/, so no separate bind-mount is
+      # needed.
       volumes = [ "/var/lib/magento:/var/lib/magento" ];
     };
   };
