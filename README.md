@@ -56,6 +56,9 @@ Add a new host: `mkdir hosts/<name>` + `configuration.nix` + (optional)
   static HTML reports at `mageos-tests.bougie.tools`. Newest host —
   the manual post-deploy steps (deploy key, DNS, borg credentials) are
   listed in [`hosts/mageos-testing/testing.nix`](hosts/mageos-testing/testing.nix).
+  It also hosts the licensing-store demo's GitHub Actions runner in a microvm
+  ([`hosts/mageos-testing/demo-runner.nix`](hosts/mageos-testing/demo-runner.nix)),
+  which needs a registration token placed by hand once, after the first switch.
 - **`internal`** — Cresset's internal identity and tooling host. Authentik at
   `auth.cresset.tools` is the standard identity provider; the read-only,
   jj-native monorepo viewer is served at `code.cresset.tools` behind Authentik

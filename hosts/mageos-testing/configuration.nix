@@ -1,7 +1,7 @@
 { lib, ... }:
 
 {
-  imports = [ ./testing.nix ];
+  imports = [ ./testing.nix ./demo-runner.nix ];
 
   boot.loader.grub.enable = true;
   boot.initrd.availableKernelModules = [
