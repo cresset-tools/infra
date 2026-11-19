@@ -1,6 +1,7 @@
 { inputs, ... }:
 
-# A GitHub Actions runner for cresset-tools/bougie-license-demo (private), in a
+# GitHub Actions runners for cresset-tools/bougie-license-demo and
+# cresset-tools/magebuild-bench (both private), one container each, in a
 # microvm so the demo's builds never share a kernel with the Mage-OS test
 # pipeline or this host's own secrets. The VM itself is ./demo-runner-vm.nix:
 # NixOS with podman, running the official runner image.
@@ -32,6 +33,10 @@
     "d /var/lib/demo-runner 0700 microvm kvm -"
     "f /var/lib/demo-runner/registration-token 0600 microvm kvm -"
     "z /var/lib/demo-runner/registration-token 0600 microvm kvm -"
+    # The bench shop's runner (cresset-tools/magebuild-bench), registered the
+    # same way with its own token file.
+    "f /var/lib/demo-runner/registration-token-bench 0600 microvm kvm -"
+    "z /var/lib/demo-runner/registration-token-bench 0600 microvm kvm -"
   ];
 
   microvm.vms.demo-runner.config = ./demo-runner-vm.nix;
