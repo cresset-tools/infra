@@ -74,6 +74,7 @@ in
   imports = [
     inputs.sops-nix.nixosModules.sops
     ../../modules/secrets.nix
+    ./bench.nix
   ];
 
   # ---- Bootloader ----
