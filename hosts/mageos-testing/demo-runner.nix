@@ -17,7 +17,7 @@
 #
 # and on this host
 #
-#   install -m600 /dev/stdin /var/lib/demo-runner/registration-token   # paste, ^D
+#   cat > /var/lib/demo-runner/registration-token   # paste, ^D
 #   systemctl restart microvm@demo-runner
 #
 # The guest registers with it and keeps the runner's own credentials on its
@@ -26,10 +26,12 @@
 {
   imports = [ inputs.microvm.nixosModules.host ];
 
+  # qemu runs as microvm:kvm and reads the token itself, and refuses to start
+  # the VM when a credential file is missing or unreadable.
   systemd.tmpfiles.rules = [
-    "d /var/lib/demo-runner 0700 root root -"
-    # qemu refuses to start the VM when a credential file is missing.
-    "f /var/lib/demo-runner/registration-token 0600 root root -"
+    "d /var/lib/demo-runner 0700 microvm kvm -"
+    "f /var/lib/demo-runner/registration-token 0600 microvm kvm -"
+    "z /var/lib/demo-runner/registration-token 0600 microvm kvm -"
   ];
 
   microvm.vms.demo-runner.config = ./demo-runner-vm.nix;
