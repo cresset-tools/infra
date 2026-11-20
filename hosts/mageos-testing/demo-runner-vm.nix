@@ -103,7 +103,15 @@ in
   microvm = {
     hypervisor = "qemu";
     vcpu = 6;
-    mem = 8192;
+    # What a standard GitHub-hosted runner has. With 8 GB the bench shop's
+    # build left no room for the page cache, so its package step read the
+    # tree it had just written back from disk.
+    mem = 16384;
+    # That is a ceiling, not a reservation: with a balloon device the guest
+    # reports its free pages and the host takes them back (the host's own
+    # nightly test run needs the room). Page cache is not free memory, so
+    # drop-page-cache below empties it before that run.
+    balloon = true;
     # qemu's user-mode network: outbound only (GitHub, the Composer repos, ssh
     # to demo.bougie.tools), NAT inside qemu, nothing to configure on the host.
     interfaces = [
@@ -133,7 +141,21 @@ in
 
   systemd.tmpfiles.rules = lib.concatLists (lib.mapAttrsToList (name: _: dirs name) runners);
 
-  systemd.services = lib.mapAttrs' (name: r: lib.nameValuePair "${name}-register" (register name r)) runners;
+  systemd.services = lib.mapAttrs' (name: r: lib.nameValuePair "${name}-register" (register name r)) runners // {
+    # Hand the memory back before the host's nightly test run (01:30 UTC, see
+    # ../testing.nix). What a build read and wrote stays in the page cache until
+    # something else wants it, and the host cannot see that it is only cache.
+    # Everything dropped is on the /var volume; the next job reads it again.
+    drop-page-cache = {
+      description = "Drop the page cache so the host gets the memory back";
+      startAt = "*-*-* 01:20:00 UTC";
+      serviceConfig.Type = "oneshot";
+      script = ''
+        sync
+        echo 3 > /proc/sys/vm/drop_caches
+      '';
+    };
+  };
 
   virtualisation.podman.enable = true;
   virtualisation.oci-containers = {
