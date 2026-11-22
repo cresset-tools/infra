@@ -64,17 +64,6 @@ Add a new host: `mkdir hosts/<name>` + `configuration.nix` + (optional)
   jj-native monorepo viewer is served at `code.cresset.tools` behind Authentik
   forward-auth.
 
-### Secrets
-
-`nix develop` here gives a shell with `sops`, `age`, `ssh-to-age` and the
-pinned `deploy` (deploy-rs). Each host's secrets are in `secrets/<host>.yaml`,
-encrypted to the admin age keys and that host's key (see `.sops.yaml`):
-
-```sh
-sops secrets/demo.yaml                                              # edit
-sops -d --extract '["sconce"]["admin_password"]' secrets/demo.yaml  # read one value
-```
-
 ### Internal host bootstrap
 
 `secrets/internal.yaml` is encrypted to this host's *own* SSH host key, so the
