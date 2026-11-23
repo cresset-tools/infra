@@ -283,10 +283,6 @@ in
   };
 
   services.nginx = {
-    # Preview hostnames are review-<32-char change id>.preview.cresset.tools
-    # (61 bytes): too long for nginx's default 64-byte map bucket, which fails
-    # the config test as soon as routes.map has an entry.
-    mapHashBucketSize = 128;
     appendHttpConfig = ''
       map $host $preview_port {
         hostnames;

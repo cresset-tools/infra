@@ -588,17 +588,7 @@ systemd.services.cresset-sync-gc = {
           ${pkgs.writeShellScript "cresset-sync-gc-locked" ''
         set -u
         failed=0
-        # The export mirrors AND the review mirror. The review mirror is not under
-        # `mirrors/` -- the worker keeps it inside the jj workspace, at
-        # `.sync/mirrors/review`, and it has no `.git` suffix -- so for two months this
-        # glob missed the one mirror nothing else ever compacts. It grew to 18.6 GB in
-        # ~95 packs while every repo this loop did reach was being held at single-digit
-        # megabytes, and `git gc` on it recovers 3.6 GB -> 847 MB in under a minute.
-        #
-        # Named explicitly rather than by widening the glob: `.sync/` also holds
-        # checkpoint state that is not a git repository, and a glob that swept it would
-        # gc whatever happened to look close enough.
-        for repo in ${syncDir}/mirrors/*.git ${syncDir}/jj-workspace/.sync/mirrors/review; do
+        for repo in ${syncDir}/mirrors/*.git; do
           [ -d "$repo" ] || continue
           before=$(${pkgs.coreutils}/bin/du -sm "$repo" | ${pkgs.coreutils}/bin/cut -f1)
           if ${pkgs.git}/bin/git -C "$repo" gc --prune=now --quiet; then

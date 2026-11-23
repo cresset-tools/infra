@@ -3,21 +3,21 @@
 # cresset Composer package with a Mollie test payment, get a license key +
 # install instructions, install the gated package from a private repo" demo.
 #
-# One OCI image runs under rootful podman:
+# Two OCI images run under rootful podman:
+#   - sconce      — the Composer v2 repo server (public, EUPL-1.2), behind
+#                   repo.bougie.tools; issues/serves the licensed packages.
+#                   Pulled from ghcr.io/cresset-tools/sconce, which its own
+#                   release CI publishes — not built here (see ../../demo-images.nix
+#                   for why the old source pin was dropped).
 #   - magento     — the storefront (Mage-OS 3.1.0), behind demo.bougie.tools;
 #                   Nix-built (../../demo-images.nix, exposed as
 #                   inputs.self.packages.<system>.magentoImage); the app tree
 #                   itself is host state mounted in (see below).
 #
-# The licensed packages, license keys and editions live in the cresset/demo
-# repository on bougierepo.com (hosts/bougierepo), which the store's licensing
-# module talks to. They were moved off this box with `sconce org-export` /
-# `org-import`; repo.bougie.tools now only redirects there.
-#
 # The datastores are classic NixOS services on the host, NOT containers
 # (modular `system.services.*` don't cover postgres/mariadb/opensearch/redis
-# at this nixpkgs pin — see CONTAINERIZATION.md). The container uses
-# `--network=host` and reaches every datastore on 127.0.0.1.
+# at this nixpkgs pin — see CONTAINERIZATION.md). Both containers use
+# `--network=host` and reach every datastore on 127.0.0.1.
 #
 # Secrets come from sops-nix (../secrets/demo.yaml, decrypted at activation
 # with this box's SSH host key). Nothing secret is in the Nix store or git.
@@ -122,7 +122,7 @@ in
         80   # ACME HTTP-01 + HTTPS redirect
         443  # HTTPS
       ];
-      # 8081 (the container) and the datastore ports stay loopback-only.
+      # 8080/8081 (containers) and the datastore ports stay loopback-only.
     };
   };
 
@@ -170,8 +170,27 @@ in
   users.groups.magento.gid = 990;
 
   # ---- Secrets rendered into runtime config (sops-nix) ----
-  # secrets.nix declares the raw secrets; here we compose them into the file
-  # Magento actually reads: env.php.
+  # secrets.nix declares the raw secrets; here we compose them into the two
+  # files the apps actually read: sconce's env-file and Magento's env.php.
+  sops.templates."sconce-env" = {
+    # podman reads this as root at container start (--env-file), so the
+    # default root:0400 is fine.
+    content = ''
+      DATABASE_URL=postgresql://sconce:${config.sops.placeholder."postgres/sconce_password"}@127.0.0.1:5432/sconce
+      SCONCE_SECRET_KEY=${config.sops.placeholder."sconce/secret_key"}
+    '';
+  };
+
+  # The admin UI container's env: same DB + secret key (it recovers/displays
+  # license keys), plus the single-tenant basic-auth password.
+  sops.templates."sconce-ui-env" = {
+    content = ''
+      DATABASE_URL=postgresql://sconce:${config.sops.placeholder."postgres/sconce_password"}@127.0.0.1:5432/sconce
+      SCONCE_SECRET_KEY=${config.sops.placeholder."sconce/secret_key"}
+      SCONCE_ADMIN_PASSWORD=${config.sops.placeholder."sconce/admin_password"}
+    '';
+  };
+
   # Magento reads env.php from inside the container as uid 990; render it
   # owned by that user, and bind-mount it over the seeded app tree (below) so
   # the crypt key + DB password never live in the app-tree state on disk.
@@ -287,6 +306,22 @@ in
   };
 
   # ---- Datastores (classic host services, loopback-only) ----
+  services.postgresql = {
+    enable = true;
+    package = pkgs.postgresql_17;
+    settings.listen_addresses = lib.mkForce "127.0.0.1";
+    ensureDatabases = [ "sconce" ];
+    ensureUsers = [
+      { name = "sconce"; ensureDBOwnership = true; }
+    ];
+    # Peer auth over the socket (setup + the password oneshot); scram over
+    # loopback TCP for the container. pg17 encrypts passwords scram by default.
+    authentication = lib.mkAfter ''
+      host  sconce  sconce  127.0.0.1/32  scram-sha-256
+      host  sconce  sconce  ::1/128       scram-sha-256
+    '';
+  };
+
   services.mysql = {
     enable = true;
     package = pkgs.mariadb;
@@ -308,8 +343,25 @@ in
     # Defaults: bind 127.0.0.1, port 6379.
   };
 
-  # Apply the DB password from sops once MariaDB is up. It is alphanumeric
-  # (verified), so single-quoting in SQL is injection-safe.
+  # Apply DB passwords from sops after each datastore is up. Passwords are
+  # alphanumeric (verified), so single-quoting in SQL is injection-safe.
+  systemd.services.demo-postgres-password = {
+    description = "Set the sconce Postgres role password from sops";
+    after = [ "postgresql.service" ];
+    requires = [ "postgresql.service" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      User = "postgres";
+      RemainAfterExit = true;
+    };
+    script = ''
+      pw=$(cat ${config.sops.secrets."postgres/sconce_password".path})
+      ${config.services.postgresql.package}/bin/psql -v ON_ERROR_STOP=1 --no-psqlrc \
+        -c "ALTER ROLE sconce WITH LOGIN PASSWORD '$pw';"
+    '';
+  };
+
   systemd.services.demo-mysql-password = {
     description = "Create/refresh the magento MariaDB user from sops";
     after = [ "mysql.service" ];
@@ -439,6 +491,13 @@ in
   # + `current` symlink), owned by the magento build/serve user. The container
   # mounts the whole /var/lib/magento and serves `current`.
   systemd.tmpfiles.rules = [
+    # uid 10001 is the unprivileged `sconce` user baked into the published
+    # image; the Nix image it replaced ran as root. Rootful podman maps that
+    # straight onto the host uid, so the CAS must be owned by it. `Z` recursively
+    # re-owns objects the old root-running image already wrote.
+    "d /var/lib/sconce                 0755 root    root    -"
+    "d /var/lib/sconce/cas             0755 10001   10001   -"
+    "Z /var/lib/sconce/cas             0755 10001   10001   -"
     "d /var/lib/magento                0755 magento magento -"
     "d /var/lib/magento/releases       0755 magento magento -"
     "d /var/lib/magento/shared         0755 magento magento -"
@@ -453,6 +512,49 @@ in
   virtualisation.podman.enable = true;
   virtualisation.oci-containers = {
     backend = "podman";
+    containers.sconce = {
+      image = "ghcr.io/cresset-tools/sconce:latest";
+      # `newer` (not `always`) so a GHCR outage falls back to the locally
+      # cached image instead of refusing to start. See hosts/bougierepo.
+      pull = "newer";
+      autoStart = true;
+      extraOptions = [ "--network=host" ];
+      # Spelled out rather than inherited from the image. The Nix image this
+      # replaced defaulted to `--base-url https://repo.bougie.tools` and bound
+      # only 8080; the published image's CMD defaults to a localhost base-url
+      # and also binds 8081. Taking the image default here would have silently
+      # rewritten every packages.json/dist URL the demo hands out, and collided
+      # with sconce-ui's listener.
+      cmd = [
+        "serve"
+        "--cas" "/var/lib/sconce/cas"
+        "--listen" "0.0.0.0:8080"
+        "--base-url" "https://repo.bougie.tools"
+      ];
+      volumes = [ "/var/lib/sconce/cas:/var/lib/sconce/cas" ];
+      environmentFiles = [ config.sops.templates."sconce-env".path ];
+    };
+    # The operator dashboard (admin.bougie.tools). Same image as `sconce`, but
+    # running the `ui` listener in single-tenant mode: no user accounts, gated
+    # by HTTP basic auth (any username; the sops admin_password). Loopback-only
+    # — nginx terminates TLS and proxies to it.
+    containers.sconce-ui = {
+      image = "ghcr.io/cresset-tools/sconce:latest";
+      # `newer` (not `always`) so a GHCR outage falls back to the locally
+      # cached image instead of refusing to start. See hosts/bougierepo.
+      pull = "newer";
+      autoStart = true;
+      extraOptions = [ "--network=host" ];
+      cmd = [
+        "ui"
+        "--single-tenant"
+        "--listen"
+        "127.0.0.1:8082"
+        "--public-base-url"
+        "https://repo.bougie.tools"
+      ];
+      environmentFiles = [ config.sops.templates."sconce-ui-env".path ];
+    };
     containers.magento = {
       image = "magento:demo";
       imageFile = demoImages.magentoImage;
@@ -468,10 +570,18 @@ in
     };
   };
 
-  # Order the container after its datastores + the password oneshot so the
-  # app never connects before its DB user exists. `after` on a datastore
+  # Order the containers after their datastores + the password oneshots so the
+  # apps never connect before their DB user exists. `after` on a datastore
   # unit is ordering-only (harmless if the unit name shifts); the hard
   # dependency is on the password oneshot this config owns.
+  systemd.services.podman-sconce = {
+    after = [ "postgresql.service" "demo-postgres-password.service" ];
+    requires = [ "demo-postgres-password.service" ];
+  };
+  systemd.services.podman-sconce-ui = {
+    after = [ "postgresql.service" "demo-postgres-password.service" ];
+    requires = [ "demo-postgres-password.service" ];
+  };
   systemd.services.podman-magento = {
     after = [
       "mysql.service"
@@ -493,16 +603,15 @@ in
     recommendedOptimisation = true;
     recommendedTlsSettings = true;
     recommendedGzipSettings = true;
-    recommendedProxySettings = true; # Host + X-Forwarded-* for the upstream
+    recommendedProxySettings = true; # Host + X-Forwarded-* for both upstreams
 
-    # The demo's Composer repo moved to bougierepo.com (cresset/demo there);
-    # old links and composer configs land on the same path at the new host.
-    # Composer does not carry http-basic auth across the host change, so a
-    # buyer still adds bougierepo.com to auth.json.
+    # The Composer repo server. Composer uploads/dist can be large; sconce
+    # streams from the CAS, so give it generous body headroom.
     virtualHosts."repo.bougie.tools" = {
       enableACME = true;
       forceSSL = true;
-      globalRedirect = "bougierepo.com";
+      extraConfig = "client_max_body_size 256m;";
+      locations."/".proxyPass = "http://127.0.0.1:8080";
     };
 
     # The storefront. X-Forwarded-Proto (from recommendedProxySettings) lets
@@ -512,6 +621,14 @@ in
       forceSSL = true;
       extraConfig = "client_max_body_size 64m;";
       locations."/".proxyPass = "http://127.0.0.1:8081";
+    };
+
+    # The sconce operator dashboard (single-tenant UI container). App-level
+    # HTTP basic auth (SCONCE_ADMIN_PASSWORD) on top of TLS.
+    virtualHosts."admin.bougie.tools" = {
+      enableACME = true;
+      forceSSL = true;
+      locations."/".proxyPass = "http://127.0.0.1:8082";
     };
   };
 

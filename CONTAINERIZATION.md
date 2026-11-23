@@ -8,14 +8,6 @@ run as **native NixOS services**, and a nixpkgs bump upgrades the whole runtime.
 > Status: **implemented & live.** Everything below is wired into the flake and
 > serving on `hosts/demo`. Where the design and the as-built config drifted, it's
 > noted inline — `hosts/demo/configuration.nix` is the authority.
->
-> **sconce left the box on 2026-11-25.** The `cresset` org was moved to
-> [bougierepo.com](https://bougierepo.com) with `sconce org-export` /
-> `org-import`, and the store's licensing module now talks to it there. The
-> demo box runs only the `magento` container: the `sconce` and `sconce-ui`
-> containers, Postgres and `admin.bougie.tools` are gone, and
-> `repo.bougie.tools` is a 301 redirect to `bougierepo.com` (same path). The
-> sconce sections below are kept as the history of how it ran here.
 
 ## Decisions (locked)
 
@@ -39,40 +31,32 @@ run as **native NixOS services**, and a nixpkgs bump upgrades the whole runtime.
 
 ## Architecture
 
-As it runs today:
-
 ```
-      demo.bougie.tools ─┐        repo.bougie.tools ─► 301 https://bougierepo.com
-                         ▼
-  ┌──────────────  hosts/demo  (Hetzner CX33, x86_64, NixOS) ─────────┐
-  │  nginx + security.acme (HTTP-01)   →  TLS + vhost routing          │
-  │        │  proxy 127.0.0.1:8081                                     │
-  │  ┌── oci-container: magento ──────┐                                │
-  │  │ Nix img: php84-fpm + nginx     │── licensing API ──► bougierepo.com
-  │  │ + app tree (host bind-mount,   │                                │
-  │  │   seeded) + env (secret)       │                                │
-  │  └───────┬────────┬────────┬──────┘                                │
-  │   native │ native │ native │                                       │
-  │  ┌─ mariadb ─┐ ┌ opensearch ┐ ┌ redis ┐                            │
-  │  services.mysql  services.    services.redis                       │
-  │  (pkg=mariadb)   opensearch                                        │
-  └────────────────────────────────────────────────────────────────────┘
+      demo.bougie.tools ─┐                         ┌─ repo.bougie.tools
+                         ▼                         ▼
+  ┌──────────────  hosts/demo  (Hetzner CX33, x86_64, NixOS) ─────────────────┐
+  │  nginx + security.acme (HTTP-01)   →  TLS + vhost routing                  │
+  │        │  proxy 127.0.0.1:8081            │  proxy 127.0.0.1:8080           │
+  │  ┌── oci-container: magento ──────┐  ┌── oci-container: sconce ─────────┐   │
+  │  │ Nix img: php84-fpm + nginx     │  │ Nix img: sconce + git + cacert   │   │
+  │  │ + app tree (host bind-mount,   │  │ CAS bind-mount /var/lib/sconce   │   │
+  │  │   seeded) + env (secret)       │  │ env: DATABASE_URL, SECRET_KEY    │   │
+  │  └───────┬────────┬────────┬──────┘  └───────────────┬──────────────────┘   │
+  │   native │ native │ native │  native                 │ native               │
+  │  ┌─ mariadb ─┐ ┌ opensearch ┐ ┌ redis ┐        ┌─ postgresql ─┐             │
+  │  services.mysql  services.    services.redis    services.postgresql         │
+  │  (pkg=mariadb)   opensearch                                                  │
+  └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The container reaches the native datastores over the host loopback
-(`--network=host`).
+App containers reach the native datastores over the host loopback (run them with
+`--network=host`, or a bridge + `127.0.0.1` published datastore sockets).
 
-Until 2026-11-25 the box also ran a `sconce` container behind
-`repo.bougie.tools` (`127.0.0.1:8080`, CAS in `/var/lib/sconce`, catalog in a
-native `services.postgresql`) and a `sconce-ui` container, the operator
-dashboard, behind `admin.bougie.tools` (`127.0.0.1:8082`, `ui --single-tenant`
-behind HTTP basic auth).
+A third container was added at go-live: **sconce-ui**, the operator dashboard
+behind `admin.bougie.tools` → `127.0.0.1:8082` (same sconce image, running
+`ui --single-tenant`, gated by HTTP basic auth).
 
-## Component A — sconce image (retired)
-
-> No longer on this box. The hosts had already switched from this Nix-built
-> image to the published `ghcr.io/cresset-tools/sconce` image before sconce
-> moved to bougierepo.com; see the note at the top of `demo-images.nix`.
+## Component A — sconce image (settled)
 
 Pure-rustls stack (no OpenSSL/libpq/libgit2; only `libc`+`ring` native), so the
 image is tiny. Runtime closure = the binary + **`git`** (the in-process mirror
@@ -158,11 +142,10 @@ the dump must include the three modulargento-minimal gaps we added:
 
 ## Component C — datastores (classic NixOS services, native)
 
-All four present & mature at the pin. Gotcha-aware config (the Postgres block
-went with sconce on 2026-11-25; the other three remain):
+All four present & mature at the pin. Gotcha-aware config:
 
 ```nix
-services.postgresql = {                         # sconce (removed)
+services.postgresql = {                         # sconce
   enable = true; package = pkgs.postgresql_17;  # pin; version bumps don't auto-migrate
   ensureDatabases = [ "sconce" ];
   ensureUsers = [{ name = "sconce"; ensureDBOwnership = true; }];  # ensurePermissions removed for pg
@@ -183,29 +166,26 @@ services.redis.servers."".enable = true;        # multi-instance; "" = default 1
 ```
 
 As built the MariaDB database/user are named `magento` (not
-`bougie_licensing_demo`), and its password is applied by a sops-fed oneshot
-unit — `ensureUsers.ensurePermissions` doesn't exist at this pin. See
+`bougie_licensing_demo`), and both DB passwords are applied by sops-fed oneshot
+units — `ensureUsers.ensurePermissions` doesn't exist at this pin. See
 `hosts/demo/configuration.nix`.
 
 ## Wiring, secrets, upgrade, reset
 
-- **oci-containers**: `virtualisation.oci-containers.backend = "podman";` one
-  container, `magento`, with
-  `imageFile = self.packages.x86_64-linux.magentoImage`,
+- **oci-containers**: `virtualisation.oci-containers.backend = "podman";` three
+  containers (`sconce`, `sconce-ui`, `magento`) with
+  `imageFile = self.packages.x86_64-linux.{sconceImage,magentoImage}`,
   `extraOptions = [ "--network=host" ]` (reach the loopback datastores),
-  a volume for the app tree. (Until 2026-11-25 also `sconce` and `sconce-ui`.)
-- **nginx/ACME**: `demo.` → :8081, and `repo.` as a `globalRedirect` to
-  `bougierepo.com`; `enableACME = true; forceSSL = true;`, proxy headers via
+  `volumes` for CAS / app-tree, `environmentFiles` for secrets.
+- **nginx/ACME**: three `virtualHosts` (`repo.` → :8080, `demo.` → :8081,
+  `admin.` → :8082), `enableACME = true; forceSSL = true;`, proxy headers via
   `recommendedProxySettings`.
 - **Secrets**: **sops-nix** (chosen over hand-provisioned `EnvironmentFile`s —
   DEMO_PLAN decision #2): `modules/secrets.nix` declares them,
   `secrets/demo.yaml` carries them encrypted, and `sops.templates` compose them
-  into Magento's `env.php`/`auth.json`. `sconce/service_token` stays: it is the
-  store's token for bougierepo.com's licensing API.
-- **TLS from PHP**: the image has no `/etc/ssl/certs`, so `phpRuntime` sets
-  `curl.cainfo` / `openssl.cafile` to the Nix `cacert` bundle.
-- **Upgrade**: bump `flake.lock` → `nix run .#switch -- demo <ip>` rebuilds the
-  image (new php/nginx/openssl) + the native datastores; the container restarts;
+  into the sconce env-files and Magento's `env.php`/`auth.json`.
+- **Upgrade**: bump `flake.lock` → `nix run .#switch -- demo <ip>` rebuilds the two
+  images (new php/nginx/openssl/git) + the native datastores; containers restart;
   rollback via Nix generations. The box also auto-upgrades weekly (Sun 05:00 UTC)
   from `github:cresset-tools/infra#demo`. The app tree upgrades separately (a
   `dep deploy` release), as befits data.
@@ -260,8 +240,3 @@ unit — `ensureUsers.ensurePermissions` doesn't exist at this pin. See
   records, reachable externally; the store serving from the Deployer release tree;
   sconce service token provisioned and issuing licenses; Mollie test key re-applied
   under the new crypt key and completing orders end-to-end.
-- ☑ **sconce moved to bougierepo.com (2026-11-25).** `cresset` org exported with
-  `sconce org-export` and imported with `org-import` (ids and token hashes kept, so
-  existing license keys and the service token work unchanged); store switched to
-  `https://bougierepo.com`; sconce, sconce-ui, Postgres and `admin.bougie.tools`
-  (vhost + DNS) removed from the box; their sops secrets deleted.
