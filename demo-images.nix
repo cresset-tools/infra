@@ -26,11 +26,6 @@ let
       opcache.enable = 1
       opcache.memory_consumption = 512
       opcache.max_accelerated_files = 60000
-      ; The image has no /etc/ssl/certs, so point curl and openssl streams at
-      ; the Nix CA bundle; otherwise every HTTPS call from php-fpm fails with
-      ; "unable to get local issuer certificate".
-      curl.cainfo = ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
-      openssl.cafile = ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
     '';
   };
   magentoNginxConf = pkgs.writeText "nginx.conf" ''
