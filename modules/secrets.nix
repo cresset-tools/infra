@@ -14,9 +14,6 @@
 
   # Each is decrypted to /run/secrets/<name> (root-only by default). The demo host
   # config renders these into the container env / Magento env.php at activation.
-  #
-  # sconce/secret_key, postgres/sconce_password and sconce/admin_password are
-  # still in secrets/demo.yaml but no longer used: sconce moved to bougierepo.
   sops.secrets = {
     "mollie/apikey_test" = { };
     "mariadb/magento_password" = { };
