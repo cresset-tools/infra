@@ -14,95 +14,59 @@
 # fsync and 0.5 s without.
 #
 # Slots are declared here: a fixed number of identical VMs that run only
-# while a preview is assigned. The guest boots straight into a minimal systemd
-# (see ./preview-vm.nix), so a cold start is short enough not to need a pool
-# of waiting VMs.
-#
-# `preview` (../../tools/preview, Rust) does the rest. `preview up <name>`
-# clones the template dataset, copies the template database, renders the
-# slot's env.php, starts the slot's taper and VM and adds the route; `preview
-# down` removes all of it. `preview serve` takes GitHub's push webhook and
-# builds and deploys the pushed commit with magebuild into the branch's
-# preview; `preview exec` and `preview ssh` run commands in a guest through
-# its agent on vsock, and `magebuild deploy --ssh "preview ssh"` deploys over
-# exactly that.
-#
-# Each slot's database is PostgreSQL behind its own taper (MySQL, Redis and
-# the search API in one process), all on this host, so a guest runs only
-# nginx and php-fpm. Neither is from nixpkgs yet, and for the trial both are
-# placed by hand: taper is not on main, and the PostgreSQL it needs carries
-# two extensions of taper's own.
-#
-#   /var/lib/preview/bin/taper     a static build of taper, at a pinned revision
-#   /var/lib/preview/postgresql    a symlink to taper's postgresql-shade build
-#
-# Also by hand, for building and the webhook: /var/lib/preview/deploy_key (a
-# read-only deploy key for the shop's repository), /var/lib/preview/auth.json
-# (Composer's credentials for it) and /var/lib/preview/webhook-secret.
+# while a preview is assigned. `preview up` (below) clones the template,
+# starts the VM and adds the route. The guest boots straight into nginx and
+# php-fpm (see ./preview-vm.nix), so a cold start is short enough not to need
+# a pool of waiting VMs.
 let
   slots = [ 1 2 3 ];
   domain = "preview.cresset.tools";
   state = "/srv/preview";
   tls = "/var/lib/preview/tls";
 
-  preview = import ../../tools/preview/package.nix { inherit pkgs; };
-
-  magebuild = pkgs.stdenvNoCC.mkDerivation rec {
-    pname = "magebuild";
-    version = "0.18.1";
-    src = pkgs.fetchurl {
-      url = "https://github.com/cresset-tools/magebuild/releases/download/magebuild-v${version}/magebuild-x86_64-unknown-linux-musl.tar.gz";
-      hash = "sha256:10m07n0hmxsk5qkmj17zlk2m8srwqg0a1i0xadic139hgw4gj6g1";
-    };
-    dontBuild = true;
-    installPhase = "install -Dm755 magebuild $out/bin/magebuild";
-  };
-
-  guest = config.microvm.vms.preview-1.config.config;
-
-  previewConfig = (pkgs.formats.toml { }).generate "preview.toml" {
-    inherit domain;
-    state_dir = "/var/lib/preview";
-    slots = builtins.length slots;
-    pool = "preview";
-    template_snapshot = "preview/template@ready";
-    slot_root = "${state}/zfs";
-    routes_map = "/var/lib/preview/routes.map";
-    guest_gateway = "10.0.2.2";
-    guest_uid = 1000;
-    guest_gid = 1000;
-    env_php = {
-      template = "app/shared/app/etc/env.php.in";
-      targets = [ "app/shared/app/etc/env.php" "app/current/app/etc/env.php" ];
-    };
-    ports = {
-      cid_base = 100;
-      http_base = 8100;
-      mysql_base = 3300;
-      redis_base = 6300;
-      search_base = 9300;
-    };
-    postgres = {
-      socket_dir = "/run/preview-postgresql";
-      user = "postgres";
-      template_database = "tpl";
-    };
-    taper = {
-      binary = "/var/lib/preview/bin/taper";
-      mysql_database = "magento";
-    };
-    build = {
-      repo = "git@github.com:cresset-tools/bougie-license-demo.git";
-      ssh_key = "/var/lib/preview/deploy_key";
-      composer_auth = "/var/lib/preview/auth.json";
-      magebuild = "${magebuild}/bin/magebuild";
-      guest_php = "${guest.system.build.previewMagentoPhp}/bin/magento-php";
-    };
-    webhook = {
-      listen = "127.0.0.1:8099";
-      secret_file = "/var/lib/preview/webhook-secret";
-      ignore_branches = [ "main" ];
-    };
+  # preview up <name> <slot> | down <slot> | exec <slot> [command] | list
+  preview = pkgs.writeShellApplication {
+    name = "preview";
+    runtimeInputs = [ config.boot.zfs.package pkgs.systemd pkgs.coreutils pkgs.gnused pkgs.nginx pkgs.socat ];
+    text = ''
+      routes=/var/lib/preview/routes.map
+      case "''${1:-}" in
+        up)
+          name=$2; slot=$3
+          [[ $name =~ ^[a-z0-9-]{1,40}$ ]] || { echo "bad name" >&2; exit 1; }
+          if zfs list "preview/slot-$slot" >/dev/null 2>&1; then "$0" down "$slot"; fi
+          zfs clone -o sync=disabled -o "mountpoint=${state}/zfs/slot-$slot/d" "preview/template@ready" "preview/slot-$slot"
+          systemctl start "microvm@preview-$slot"
+          echo "$name.${domain} 81$(printf %02d "$slot");" >> "$routes"
+          systemctl reload nginx
+          echo "https://$name.${domain}"
+          ;;
+        down)
+          slot=$2
+          # Nothing in a preview is worth a clean shutdown: its dataset is
+          # destroyed two lines down. Killing takes milliseconds, a guest
+          # shutdown seconds.
+          systemctl kill --signal=KILL "microvm@preview-$slot" 2>/dev/null || true
+          systemctl stop "microvm@preview-$slot" "microvm-virtiofsd@preview-$slot" || true
+          systemctl reset-failed "microvm@preview-$slot" 2>/dev/null || true
+          sed -i "/ 81$(printf %02d "$slot");$/d" "$routes"
+          systemctl reload nginx || true
+          if zfs list "preview/slot-$slot" >/dev/null 2>&1; then zfs destroy "preview/slot-$slot"; fi
+          ;;
+        exec|root)
+          # preview exec <slot> < script   (or: preview exec <slot> 'command')
+          # `root` is the same as root instead of magento.
+          port=7000; [ "$1" = root ] && port=7001
+          slot=$2
+          if [ $# -ge 3 ]; then printf '%s\n' "$3"; else cat; fi \
+            | socat -t 3600 - "VSOCK-CONNECT:$((100 + slot)):$port"
+          ;;
+        list)
+          cat "$routes"; zfs list -r -o name,used,refer,origin preview
+          ;;
+        *) echo "usage: preview up <name> <slot> | down <slot> | exec <slot> [command] | list" >&2; exit 1 ;;
+      esac
+    '';
   };
 in
 {
@@ -157,78 +121,13 @@ in
       };
     }) slots); } ];
 
-  environment.systemPackages = [ preview magebuild ];
-  environment.etc."preview/config.toml".source = previewConfig;
-
-  users.groups.preview = { };
-  users.users.preview-postgres = { isSystemUser = true; group = "preview"; };
-  users.users.preview-taper = { isSystemUser = true; group = "preview"; };
-
-  # One PostgreSQL for every slot, on its own dataset in the pool (so with
-  # sync=disabled: a crash can lose the last seconds, never consistency, and
-  # nothing in it is precious). It holds the template database and a copy of
-  # it per slot; only local sockets, and only the preview group reaches them.
-  systemd.services.preview-postgresql = {
-    description = "PostgreSQL for preview environments";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "preview-pool.service" ];
-    requires = [ "preview-pool.service" ];
-    unitConfig.ConditionPathExists = "/var/lib/preview/postgresql/bin/postgres";
-    serviceConfig = {
-      User = "preview-postgres";
-      Group = "preview";
-      RuntimeDirectory = "preview-postgresql";
-      RuntimeDirectoryMode = "0750";
-      ExecStart = lib.concatStringsSep " " [
-        "/var/lib/preview/postgresql/bin/postgres -D ${state}/pg"
-        "-c listen_addresses= -c unix_socket_directories=/run/preview-postgresql"
-        "-c max_connections=300 -c shared_buffers=512MB -c synchronous_commit=off"
-      ];
-      KillMode = "mixed";
-      KillSignal = "SIGINT";
-      TimeoutStopSec = 30;
-      Restart = "on-failure";
-    };
-  };
-
-  # A slot's taper: MySQL, Redis and search for that slot's database, on the
-  # slot's ports on the loopback, where the guest reaches them as 10.0.2.2.
-  systemd.services."preview-taper@" = {
-    description = "taper for preview slot %i";
-    after = [ "preview-postgresql.service" ];
-    requires = [ "preview-postgresql.service" ];
-    serviceConfig = {
-      ExecStart = "${preview}/bin/preview taper %i";
-      User = "preview-taper";
-      Group = "preview";
-      RuntimeDirectory = "preview-taper-%i";
-      Restart = "on-failure";
-      RestartSec = 1;
-    };
-  };
-
-  # GitHub's push webhook. It runs as root: it clones datasets, starts units
-  # and copies databases.
-  systemd.services.preview-webhook = {
-    description = "Preview environments: GitHub webhook";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "network-online.target" "preview-postgresql.service" ];
-    wants = [ "network-online.target" ];
-    unitConfig.ConditionPathExists = "/var/lib/preview/webhook-secret";
-    path = [ config.boot.zfs.package pkgs.systemd pkgs.git pkgs.openssh ];
-    serviceConfig = {
-      ExecStart = "${preview}/bin/preview serve";
-      Restart = "on-failure";
-      RestartSec = 5;
-    };
-  };
+  environment.systemPackages = [ preview ];
 
   systemd.tmpfiles.rules = [
     "d ${state} 0755 root root -"
     "d /var/lib/preview 0755 root root -"
     "d ${tls} 0750 root nginx -"
     "f /var/lib/preview/routes.map 0644 root root -"
-    "d /var/lib/preview/bin 0755 root root -"
   ];
 
   # Create the pool on first boot, import it on later ones. A file vdev is
@@ -244,22 +143,15 @@ in
       # After a switch that first adds ZFS, the booted system's module tree has
       # no zfs.ko; the kernel is the same one, so take it from the current system.
       modprobe zfs 2>/dev/null || modprobe -d /run/current-system/kernel-modules zfs
-      if ! zpool list preview >/dev/null 2>&1; then
-        if [ -e ${state}/pool.img ]; then
-          zpool import -d ${state} preview
-        else
-          # No dataset is mounted under the pool's own name: the VMs' share
-          # directories (${state}/zfs/slot-N) exist before the pool does, and
-          # ZFS will not mount over a directory that has entries.
-          truncate -s 150G ${state}/pool.img
-          zpool create -o ashift=12 -O sync=disabled -O compression=lz4 -O atime=off \
-            -O xattr=sa -O acltype=posixacl -O mountpoint=none preview ${state}/pool.img
-          zfs create -o mountpoint=${state}/template preview/template
-        fi
-      fi
-      zfs list preview/pg >/dev/null 2>&1 || zfs create -o mountpoint=${state}/pg preview/pg
-      chown preview-postgres:preview ${state}/pg
-      chmod 700 ${state}/pg
+      zpool list preview >/dev/null 2>&1 && exit 0
+      [ -e ${state}/pool.img ] && zpool import -d ${state} preview && exit 0
+      # No dataset is mounted under the pool's own name: the VMs' share
+      # directories (${state}/zfs/slot-N) exist before the pool does, and
+      # ZFS will not mount over a directory that has entries.
+      truncate -s 150G ${state}/pool.img
+      zpool create -o ashift=12 -O sync=disabled -O compression=lz4 -O atime=off \
+        -O xattr=sa -O acltype=posixacl -O mountpoint=none preview ${state}/pool.img
+      zfs create -o mountpoint=${state}/template preview/template
     '';
   };
 
@@ -283,10 +175,6 @@ in
   };
 
   services.nginx = {
-    # Preview hostnames are review-<32-char change id>.preview.cresset.tools
-    # (61 bytes): too long for nginx's default 64-byte map bucket, which fails
-    # the config test as soon as routes.map has an entry.
-    mapHashBucketSize = 128;
     appendHttpConfig = ''
       map $host $preview_port {
         hostnames;
@@ -294,14 +182,6 @@ in
         include /var/lib/preview/routes.map;
       }
     '';
-    # The webhook; nothing else of the daemon is reachable from outside.
-    virtualHosts.${domain} = {
-      forceSSL = true;
-      sslCertificate = "${tls}/fullchain.pem";
-      sslCertificateKey = "${tls}/key.pem";
-      locations."= /hook".proxyPass = "http://127.0.0.1:8099";
-      locations."/".return = "404";
-    };
     virtualHosts."*.${domain}" = {
       forceSSL = true;
       sslCertificate = "${tls}/fullchain.pem";

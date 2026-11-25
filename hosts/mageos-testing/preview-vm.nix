@@ -5,13 +5,11 @@
 # search are one taper per preview on the host, reached at 10.0.2.2 (the
 # host's loopback as user-mode networking shows it to the guest).
 #
-# There is no sshd. The host runs commands in the guest through an agent on
-# a vsock port, the way incus does it: `preview-agent` (../../tools/preview)
-# runs each command as the user its request names, with stdin, stdout and
-# stderr streamed both ways. `preview exec` and `preview ssh` on the host are
-# its clients, and `magebuild deploy --ssh "preview ssh"` deploys through it.
-# That saves host key generation at every boot and leaves the guest with one
-# listening TCP port.
+# There is no sshd. The host writes releases straight into the dataset, and
+# runs commands in the guest through an agent on a vsock port (the way incus
+# does it): a socket-activated unit that runs what it is sent as the `magento`
+# user. `preview exec <slot>` on the host is the client. That saves host key
+# generation at every boot and leaves the guest with one listening TCP port.
 #
 # The guest is identical for every slot except its forwarded port and vsock
 # id, so starting a preview is "clone a dataset, start a VM".
@@ -80,9 +78,12 @@ let
     echo "nameserver 10.0.2.3" > $out/resolv.conf
     ln -s ${pkgs.cacert}/etc/ssl $out/ssl
   '';
-  previewTools = import ../../tools/preview/package.nix { inherit pkgs; };
-  # What a command run through the agent finds on its PATH.
-  agentPath = "${lib.makeBinPath [ pkgs.bash pkgs.coreutils php magentoPhp pkgs.gnugrep pkgs.gnused pkgs.findutils pkgs.procps pkgs.git pkgs.unzip pkgs.mariadb.client pkgs.util-linux pkgs.gnutar pkgs.zstd pkgs.gzip config.systemd.package ]}:/bin";
+  agent = pkgs.writeShellScript "preview-agent" ''
+    export PATH=${lib.makeBinPath [ pkgs.bash pkgs.coreutils php magentoPhp pkgs.gnugrep pkgs.gnused pkgs.findutils pkgs.procps pkgs.git pkgs.unzip pkgs.mariadb.client pkgs.util-linux config.systemd.package ]}:/bin
+    export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+    bash -s
+    echo "exit=$?"
+  '';
   # /etc/systemd/system for the guest: the unit files NixOS generated for the
   # services defined below, the handful of upstream targets they hang off,
   # and journald. Nothing else exists, so nothing else starts.
@@ -96,7 +97,8 @@ let
       ln -s ${upstream}/$u $out/$u
     done
     ln -s ${unit "nginx.service"} ${unit "phpfpm-magento.service"} $out/
-    ln -s ${unit "preview-agent.socket"} ${unit "preview-agent.service"} $out/
+    ln -s ${unit "preview-agent.socket"} ${unit "preview-agent@.service"} $out/
+    ln -s ${unit "preview-agent-root.socket"} ${unit "preview-agent-root@.service"} $out/
     cat > $out/preview.target <<'EOF'
     [Unit]
     Description=Preview environment
@@ -106,7 +108,7 @@ let
     EOF
     sed -i 's/^ *//' $out/preview.target
     ln -s ../nginx.service ../phpfpm-magento.service $out/preview.target.wants/
-    ln -s ../preview-agent.socket $out/sockets.target.wants/
+    ln -s ../preview-agent.socket ../preview-agent-root.socket $out/sockets.target.wants/
     ln -s ../systemd-journald.socket ../systemd-journald-dev-log.socket $out/sockets.target.wants/
     ln -s ../systemd-journald.service $out/sysinit.target.wants/
   '';
@@ -159,7 +161,6 @@ let
 in
 {
   system.build.previewRootfs = rootfs;
-  system.build.previewMagentoPhp = magentoPhp;
 
   networking.hostName = "preview-${toString slot}";
   system.stateVersion = "25.11";
@@ -286,21 +287,39 @@ in
     createHome = false;
   };
 
-  # The agent. systemd holds the port from the start and hands it over, so
-  # the host can connect as soon as sockets.target is reached.
+  # The agent: whatever arrives on the socket is a shell script, run as
+  # magento in the current release, output and exit status sent back.
   systemd.sockets.preview-agent = {
     wantedBy = [ "sockets.target" ];
-    socketConfig.ListenStream = "vsock::7000";
-  };
-  systemd.services.preview-agent = {
-    environment = {
-      PREVIEW_AGENT_PATH = agentPath;
-      SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+    socketConfig = {
+      ListenStream = "vsock::7000";
+      Accept = true;
     };
+  };
+  # The same on 7001 as root, for the host's own use (restarting php-fpm,
+  # reading the journal).
+  systemd.sockets.preview-agent-root = {
+    wantedBy = [ "sockets.target" ];
+    socketConfig = {
+      ListenStream = "vsock::7001";
+      Accept = true;
+    };
+  };
+  systemd.services."preview-agent-root@" = {
     serviceConfig = {
-      ExecStart = "${previewTools}/bin/preview-agent";
-      Restart = "always";
-      RestartSec = "100ms";
+      StandardInput = "socket";
+      StandardOutput = "socket";
+      StandardError = "socket";
+      ExecStart = agent;
+    };
+  };
+  systemd.services."preview-agent@" = {
+    serviceConfig = {
+      User = "magento";
+      StandardInput = "socket";
+      StandardOutput = "socket";
+      StandardError = "socket";
+      ExecStart = agent;
     };
   };
   systemd.tmpfiles.rules = [ "L+ /data - - - - /slot/d" ];
