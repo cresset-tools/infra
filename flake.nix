@@ -724,6 +724,23 @@
           touch $out
         '';
 
+      # `nix develop` in operations/infra: the tools for editing and reading
+      # secrets/*.yaml (sops + age, ssh-to-age to derive a host's recipient from
+      # its SSH key) and the pinned deploy-rs CLI. Also on the admin Mac
+      # (.sops.yaml's admin_macbook), which is why it is not x86_64-linux only.
+      devShells = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (sys:
+        let p = nixpkgs.legacyPackages.${sys};
+        in {
+          default = p.mkShellNoCC {
+            packages = [
+              p.sops
+              p.age
+              p.ssh-to-age
+              deploy-rs.packages.${sys}.default
+            ];
+          };
+        });
+
       # Nix-built OCI images for the demo host (built here, loaded via
       # oci-containers imageFile). sconce is not among them — it comes from
       # ghcr.io/cresset-tools/sconce, pulled by tag (see demo-images.nix).
