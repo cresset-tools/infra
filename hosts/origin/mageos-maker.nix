@@ -53,12 +53,14 @@ let
   # qoliber's keyed registry as nebula/admin) and 2b6e653 (modulargento is
   # offered on Mage-OS 3.5.0 and 4.0.0; 3.0.0, no longer served, is dropped)
   # and 7a4aefc (the modules Mage-OS 4.0.0 bundles become removable sets;
-  # a set may now require several sets and layers).
+  # a set may now require several sets and layers). 7614ff6 moves
+  # laravel/framework 13.7.0 -> 13.44.1 for CVE-2026-114508 (composer.lock
+  # changed, so vendorHash moved; package-lock.json did not).
   src = pkgs.fetchFromGitHub {
     owner = "cresset-tools";
     repo = "mageos-maker";
-    rev = "5cbc090913b313fef954dc9b48339553c301bc52";
-    hash = "sha256-88wmXAcMgQu7CMh/d4C6uf3LaKJw1PcG0slO+aiqysY=";
+    rev = "7614ff6fae112c2dc0791053a3d965a9ddb164d9";
+    hash = "sha256-NDQTAq4Ew6ckJZtUwNC32J1TvRJ/2marsb+Y8gFfJcs=";
   };
 
   # Front-end assets (public/build) via Vite, from the committed
@@ -92,7 +94,7 @@ let
     inherit src;
     composerNoDev = true;
     composerNoScripts = true;
-    vendorHash = "sha256-yzdAZgT2aKN27jj20Kyelldi2hdLhiwTI87hGbsyQWo=";
+    vendorHash = "sha256-PUYTLNGCdoTJx11Xt40Xxo8h13Sy3fRNTuCmhQnlQgE=";
     postInstall = ''
       cp -r ${assets}/build "$out/share/php/mageos-maker/public/build"
     '';
