@@ -14,12 +14,23 @@
 
   # Each is decrypted to /run/secrets/<name> (root-only by default). The demo host
   # config renders these into the container env / Magento env.php at activation.
+  #
+  # postgres/sconce_password is also read directly by the demo-postgres-password
+  # oneshot, which runs as the `postgres` user (peer auth) — so it must own the
+  # file, otherwise `cat` hits Permission denied on the default root:0400. The
+  # mariadb password stays root-owned: its oneshot runs as root.
   sops.secrets = {
+    "sconce/secret_key" = { };
     "mollie/apikey_test" = { };
+    "postgres/sconce_password" = { owner = "postgres"; };
     "mariadb/magento_password" = { };
     "magento/crypt_key" = { };
     # The Magento module's management-API service token (re-injected into store
     # config under the box crypt key by bin/seed-and-inject).
     "sconce/service_token" = { };
+    # HTTP basic-auth password for the sconce admin UI (admin.bougie.tools,
+    # single-tenant mode). Read it when needed with:
+    #   sops -d --extract '["sconce"]["admin_password"]' secrets/demo.yaml
+    "sconce/admin_password" = { };
   };
 }

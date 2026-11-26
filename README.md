@@ -44,9 +44,9 @@ Add a new host: `mkdir hosts/<name>` + `configuration.nix` + (optional)
   disk) and the Cloudflare record must stay **DNS-only** (grey cloud)
   — proxying would terminate TLS at a third party.
 - **`demo`** — the licensing demo (Hetzner CX33, x86): the
-  `demo.bougie.tools` Magento storefront. Its licensed packages and keys
-  are the `cresset/demo` repository on `bougierepo.com`;
-  `repo.bougie.tools` redirects there. A Nix-built OCI image (from
+  `demo.bougie.tools` Magento storefront, the `repo.bougie.tools`
+  sconce Composer repo, and the `admin.bougie.tools` operator
+  dashboard. Two Nix-built OCI images (from
   [`demo-images.nix`](demo-images.nix)) under rootful podman, with the
   datastores as native NixOS services and secrets via sops-nix. Plan
   and as-built notes: [`DEMO_PLAN.md`](DEMO_PLAN.md) +
@@ -72,7 +72,7 @@ encrypted to the admin age keys and that host's key (see `.sops.yaml`):
 
 ```sh
 sops secrets/demo.yaml                                              # edit
-sops -d --extract '["mollie"]["apikey_test"]' secrets/demo.yaml   # read one value
+sops -d --extract '["sconce"]["admin_password"]' secrets/demo.yaml  # read one value
 ```
 
 ### Internal host bootstrap
