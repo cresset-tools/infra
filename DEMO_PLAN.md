@@ -7,10 +7,13 @@ that now access‑gated package from a private **sconce** repo. At least one pro
 is a **Mollie subscription**, exercising the renewal path in
 `cresset/module-bougie-licensing-mollie`.
 
-> Status: **live.** Phases 1–4 are done — the demo serves at
-> `demo.bougie.tools` / `repo.bougie.tools` / `admin.bougie.tools` from
-> `hosts/demo` (Hetzner CX33), and real test purchases complete end-to-end on
-> the live box (paid order → license key issued → gated `composer install`).
+> Status: **live.** Phases 1–4 are done — the store serves at
+> `demo.bougie.tools` from `hosts/demo` (Hetzner CX33), and real test purchases
+> complete end-to-end on the live box (paid order → license key issued → gated
+> `composer install`). Since 2026-11-25 the packages and licenses are served by
+> [bougierepo.com](https://bougierepo.com) (org/repo `cresset/demo`) instead of
+> a sconce on the demo box; `repo.bougie.tools` redirects there and
+> `admin.bougie.tools` is gone.
 > As-built details: `hosts/demo/configuration.nix` +
 > [CONTAINERIZATION.md](CONTAINERIZATION.md). Still open from Phase 5:
 > nightly reset to a clean seed, and a demo banner / buyer instructions on
@@ -33,14 +36,17 @@ is a **Mollie subscription**, exercising the renewal path in
   for the modules. (Validated, see below.)
 - **Domains:** `demo.bougie.tools` (store) + `repo.bougie.tools` (sconce) —
   plus `admin.bougie.tools` (sconce operator dashboard, added at go‑live) —
-  Cloudflare DNS‑only, ACME like the other hosts.
+  Cloudflare DNS‑only, ACME like the other hosts. *Superseded 2026-11-25:*
+  sconce moved to `bougierepo.com`; `repo.bougie.tools` is a 301 to it and
+  `admin.bougie.tools` was removed (vhost and DNS).
 
 ## Architecture
 
 > Original sketch — superseded in two ways as built: the datastores moved out
 > of the compose group to **native NixOS services** (loopback-only), and the
-> box is a CX33 with **postgresql 17**. The accurate diagram is in
-> [CONTAINERIZATION.md](CONTAINERIZATION.md).
+> box is a CX33 with **postgresql 17**. Since 2026-11-25 sconce and Postgres
+> are off the box entirely (sconce runs at bougierepo.com). The accurate
+> diagram is in [CONTAINERIZATION.md](CONTAINERIZATION.md).
 
 ```
         demo.bougie.tools ─┐                    ┌─ repo.bougie.tools
@@ -57,7 +63,11 @@ is a **Mollie subscription**, exercising the renewal path in
      buyer ── composer require cresset/jibs ──► repo.bougie.tools (http-basic: license key)
 ```
 
-## Component A — sconce (`repo.bougie.tools`)
+## Component A — sconce (`repo.bougie.tools`, now `bougierepo.com`)
+
+> Since 2026-11-25 the `cresset` org lives on bougierepo.com, moved with
+> `sconce org-export` / `org-import`. The recipe below is how it was first set
+> up; on bougierepo.com use `https://bougierepo.com` as the base URL.
 
 sconce mirrors each cresset package **from its git repo by tag**, gates it behind
 license keys (private visibility), and serves the Composer v2 wire API.
@@ -117,10 +127,12 @@ Notes:
    --repository-url=https://modulargento.cresset.tools/`.
 2. `composer require cresset/module-bougie-licensing cresset/module-bougie-licensing-mollie
    mollie/magento2 mollie/magento2-subscriptions` → `setup:upgrade` / `di:compile`.
-   The Bougie modules are pulled **from `repo.bougie.tools`** (add it as a Composer
+   The Bougie modules were pulled **from `repo.bougie.tools`** (add it as a Composer
    repository with a build credential — the store installs the modules from the
-   repo it sells them through).
-3. Configure **Bougie** (base `https://repo.bougie.tools`, org/repo `cresset/demo`,
+   repo it sells them through). As built today, every store package comes from
+   `bougierepo.com/licensing-demo/store`; CI authenticates with GitHub OIDC.
+3. Configure **Bougie** (base `https://bougierepo.com` — was
+   `https://repo.bougie.tools` until 2026-11-25 — org/repo `cresset/demo`,
    service token) and **Mollie** (TEST key, enable methods + subscriptions).
 4. Catalog: virtual/downloadable products for jibs, magequery, wick, and the
    Bougie modules, each mapped to a sconce edition via the "Bougie edition (SKU)"
@@ -154,6 +166,10 @@ seed dump + media**, and have the Magento container **restore it on first boot**
   against the live box (orders complete → licenses issued → gated install).
   **Still open:** nightly reset to a clean seed, buyer instructions / demo
   banner on the storefront.
+- **sconce → bougierepo.com (2026-11-25). DONE.** `cresset` org moved with
+  `org-export` / `org-import` (license keys and the service token keep working);
+  store config and seed point at `https://bougierepo.com`; sconce, Postgres and
+  `admin.bougie.tools` removed from the demo box.
 
 ## Verified (Phase 1, 2026‑07‑07)
 
