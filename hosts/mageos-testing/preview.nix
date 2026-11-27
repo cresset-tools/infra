@@ -49,10 +49,10 @@ let
 
   magebuild = pkgs.stdenvNoCC.mkDerivation rec {
     pname = "magebuild";
-    version = "0.18.1";
+    version = "0.20.0";
     src = pkgs.fetchurl {
       url = "https://github.com/cresset-tools/magebuild/releases/download/magebuild-v${version}/magebuild-x86_64-unknown-linux-musl.tar.gz";
-      hash = "sha256:10m07n0hmxsk5qkmj17zlk2m8srwqg0a1i0xadic139hgw4gj6g1";
+      hash = "sha256:03xrs0rd3lbg5h9qq5cf2d95lxfd06s5n1xk5pgnfp0dw7nddi14";
     };
     dontBuild = true;
     installPhase = "install -Dm755 magebuild $out/bin/magebuild";
